@@ -138,16 +138,24 @@ last_f_state = mujoco.glfw.glfw.RELEASE
 last_g_state = mujoco.glfw.glfw.RELEASE
 
 # --- Main Simulation Loop ---
-
 try:
-    # Target 60 FPS for rendering
-    render_interval = 1.0 / 60.0
-    render_timer = time.time()
-
     while not mujoco.glfw.glfw.window_should_close(window):
         
+        sim_start_time = time.time()
+
+        # --- Simulation Step (only if not paused) ---
+        if not paused:
+            if model is not None:
+                action, _states = model.predict(obs, deterministic=True)
+            else:
+                action = np.zeros(env.action_space.shape, dtype=np.float32)
+            obs, reward, terminated, truncated, info = env.step(action)
+
+            if terminated or truncated:
+                print("\nEpisode finished. Resetting.")
+                obs, info = env.reset()
+
         # --- GLFW Keyboard Input Handling ---
-        # (Handle inputs every loop iteration for responsiveness)
         space_state = mujoco.glfw.glfw.get_key(window, mujoco.glfw.glfw.KEY_SPACE)
         f_state = mujoco.glfw.glfw.get_key(window, mujoco.glfw.glfw.KEY_F)
         g_state = mujoco.glfw.glfw.get_key(window, mujoco.glfw.glfw.KEY_G)
@@ -168,117 +176,88 @@ try:
         last_space_state = space_state
         last_f_state = f_state
         last_g_state = g_state
-
-
-        # --- Simulation Step (run multiple steps to catch up to real-time) ---
-        if not paused:
-            # Get current time
-            sim_end_time = time.time()
-            
-            # Run simulation steps until env.data.time catches up to sim_end_time
-            while env.data.time < sim_end_time:
-                if model is not None:
-                    action, _states = model.predict(obs, deterministic=True)
-                else:
-                    action = np.zeros(env.action_space.shape, dtype=np.float32)
-                
-                obs, reward, terminated, truncated, info = env.step(action)
-
-                if terminated or truncated:
-                    print("\nEpisode finished. Resetting.")
-                    obs, info = env.reset()
-
         
-        # --- Rendering (run at a fixed interval, e.g., 60Hz) ---
-        current_time = time.time()
-        if (current_time - render_timer) > render_interval:
-            # Reset render timer
-            render_timer = current_time
-            
-            viewport_width, viewport_height = mujoco.glfw.glfw.get_framebuffer_size(window)
-            viewport = mujoco.MjrRect(0, 0, viewport_width, viewport_height)
+        # --- Rendering ---
+        viewport_width, viewport_height = mujoco.glfw.glfw.get_framebuffer_size(window)
+        viewport = mujoco.MjrRect(0, 0, viewport_width, viewport_height)
 
-            # **** THIS IS THE KEY CHANGE ****
-            # First, update the scene with the robot's geometry
-            mujoco.mjv_updateScene(env.model, env.data, opt, None, cam, mujoco.mjtCatBit.mjCAT_ALL, scn)
+        # **** THIS IS THE KEY CHANGE ****
+        # First, update the scene with the robot's geometry
+        mujoco.mjv_updateScene(env.model, env.data, opt, None, cam, mujoco.mjtCatBit.mjCAT_ALL, scn)
 
-            # --- CUSTOM VISUALIZATION LOGIC ---
-            # This is still slow, but now it only runs 60 times per second,
-            # not as fast as the simulation.
+        # Then, add all custom visualization geoms on top of the existing scene
+        
+        # --- DEBUG: Draw a big arrow on the robot's head ---
+        if scn.ngeom < scn.maxgeom:
+            geom = scn.geoms[scn.ngeom]
+            base_pos = env.data.body('base_link').xpos
+            arrow_pos = base_pos + np.array([0, 0, 0.2])
+            arrow_size = np.array([0.05, 0.05, 0.3]) # radius1, radius2, length
+            arrow_rgba_head = np.array([0.0, 1.0, 0.0, 1.0], dtype=np.float32) # Green
+            up_direction = np.array([0, 0, 1])
             
-            # --- DEBUG: Draw a big arrow on the robot's head ---
-            if scn.ngeom < scn.maxgeom:
-                geom = scn.geoms[scn.ngeom]
-                base_pos = env.data.body('base_link').xpos
-                arrow_pos = base_pos + np.array([0, 0, 0.2])
-                arrow_size = np.array([0.05, 0.05, 0.3]) # radius1, radius2, length
-                arrow_rgba_head = np.array([0.0, 1.0, 0.0, 1.0], dtype=np.float32) # Green
-                up_direction = np.array([0, 0, 1])
+            mujoco.mjv_initGeom(
+                geom,
+                type=mujoco.mjtGeom.mjGEOM_ARROW,
+                size=arrow_size,
+                pos=arrow_pos,
+                mat=look_at(up_direction).flatten(),
+                rgba=arrow_rgba_head
+            )
+            scn.ngeom += 1
+        # --- END DEBUG ---
+
+
+        # --- Sensor and Site Visualization ---
+        if show_sensor_forces:
+            for foot_name in ["FL", "FR", "RL", "RR"]:
+                site_name = f'{foot_name}_site'
                 
-                mujoco.mjv_initGeom(
-                    geom,
-                    type=mujoco.mjtGeom.mjGEOM_ARROW,
-                    size=arrow_size,
-                    pos=arrow_pos,
-                    mat=look_at(up_direction).flatten(),
-                    rgba=arrow_rgba_head
-                )
-                scn.ngeom += 1
-            # --- END DEBUG ---
+                # Draw Blue Sphere at Site Location
+                if scn.ngeom < scn.maxgeom:
+                    geom = scn.geoms[scn.ngeom]
+                    site_pos = env.data.site(site_name).xpos
+                    mujoco.mjv_initGeom(
+                        geom,
+                        type=mujoco.mjtGeom.mjGEOM_SPHERE,
+                        size=site_size,
+                        pos=site_pos,
+                        mat=np.identity(3).flatten(),
+                        rgba=site_rgba
+                    )
+                    scn.ngeom += 1
 
-
-            # --- Sensor and Site Visualization ---
-            if show_sensor_forces:
-                for foot_name in ["FL", "FR", "RL", "RR"]:
-                    site_name = f'{foot_name}_site'
+                # Draw Force Vector Arrow
+                force_vector = env.data.sensor(f'{foot_name}_foot_force').data.copy()
+                force_magnitude = np.linalg.norm(force_vector)
+                
+                if force_magnitude > 1.0:
+                    start_pos = env.data.site(site_name).xpos
+                    direction_vector = -force_vector / force_magnitude
                     
-                    # Draw Blue Sphere at Site Location
                     if scn.ngeom < scn.maxgeom:
                         geom = scn.geoms[scn.ngeom]
-                        site_pos = env.data.site(site_name).xpos
+                        
                         mujoco.mjv_initGeom(
                             geom,
-                            type=mujoco.mjtGeom.mjGEOM_SPHERE,
-                            size=site_size,
-                            pos=site_pos,
-                            mat=np.identity(3).flatten(),
-                            rgba=site_rgba
+                            type=mujoco.mjtGeom.mjGEOM_ARROW,
+                            size=np.array([arrow_radius, arrow_radius, force_magnitude * sensor_force_scale]),
+                            pos=start_pos,
+                            mat=look_at(direction_vector).flatten(),
+                            rgba=sensor_arrow_rgba
                         )
                         scn.ngeom += 1
 
-                    # Draw Force Vector Arrow
-                    force_vector = env.data.sensor(f'{foot_name}_foot_force').data.copy()
-                    force_magnitude = np.linalg.norm(force_vector)
-                    
-                    if force_magnitude > 1.0:
-                        start_pos = env.data.site(site_name).xpos
-                        direction_vector = -force_vector / force_magnitude
-                        
-                        if scn.ngeom < scn.maxgeom:
-                            geom = scn.geoms[scn.ngeom]
-                            
-                            mujoco.mjv_initGeom(
-                                geom,
-                                type=mujoco.mjtGeom.mjGEOM_ARROW,
-                                size=np.array([arrow_radius, arrow_radius, force_magnitude * sensor_force_scale]),
-                                pos=start_pos,
-                                mat=look_at(direction_vector).flatten(),
-                                rgba=sensor_arrow_rgba
-                            )
-                            scn.ngeom += 1
-
-            # Finally, render the completed scene
-            mujoco.mjr_render(viewport, scn, ctx)
-            
-            mujoco.glfw.glfw.swap_buffers(window)
+        # Finally, render the completed scene
+        mujoco.mjr_render(viewport, scn, ctx)
         
-        # Poll events in every loop iteration
+        mujoco.glfw.glfw.swap_buffers(window)
         mujoco.glfw.glfw.poll_events()
         
-        # --- REMOVED OLD SYNC LOGIC ---
-        # time_until_next_step = env.model.opt.timestep - (time.time() - sim_start_time)
-        # if time_until_next_step > 0:
-        #     time.sleep(time_until_next_step)
+        # --- Sync with simulation time ---
+        time_until_next_step = env.model.opt.timestep - (time.time() - sim_start_time)
+        if time_until_next_step > 0:
+            time.sleep(time_until_next_step)
 
 
 except KeyboardInterrupt:
