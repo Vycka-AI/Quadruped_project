@@ -1,0 +1,97 @@
+<mujoco model="suspended_quadruped">
+  <compiler angle="degree" coordinate="local" inertiafromgeom="true"/>
+  <!-- Gravity can be left on or off, it won't matter since the base is fixed -->
+  <option integrator="RK4" timestep="0.01" gravity="0 0 -9.81"/>
+
+  <default>
+    <joint armature="1" damping="1" limited="true"/>
+    <geom conaffinity="0" condim="3" density="5.0" friction="1 0.5 0.5" rgba="0.8 0.6 0.4 1"/>
+  </default>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1=".4 .5 .6" rgb2="0 0 0" width="100" height="100"/>
+  </asset>
+
+  <worldbody>
+    <!-- 
+      KEY CHANGE: The torso is now directly part of the worldbody.
+      Its position is fixed at 0 0 0.5. There is no <freejoint>.
+      This "welds" it to the world.
+    -->
+    <body name="torso" pos="0 0 0.5">
+      <!-- <freejoint name="root"/>  <-- THIS LINE IS REMOVED -->
+      <geom name="torso_geom" type="box" size="0.15 0.1 0.04" rgba=".8 .2 .1 1"/>
+      
+      <!-- All leg bodies are defined relative to the now-fixed torso -->
+      
+      <!-- Front-Left Leg -->
+      <body name="FL_hip" pos="0.15 0.12 0">
+        <joint name="FL_hip_joint" type="hinge" axis="1 0 0" pos="0 0 0" range="-45 45"/>
+        <geom type="cylinder" size="0.03 0.02" fromto="0 0 0 0 0.04 0" rgba=".1 .8 .1 1"/>
+        <body name="FL_thigh" pos="0 0.04 0">
+          <joint name="FL_thigh_joint" type="hinge" axis="0 1 0" pos="0 0 0" range="-120 120"/>
+          <geom type="cylinder" size="0.025 0.1" fromto="0 0 0 0 0 -0.1" rgba=".1 .8 .1 1"/>
+          <body name="FL_calf" pos="0 0 -0.1">
+            <joint name="FL_calf_joint" type="hinge" axis="0 1 0" pos="0 0 0" range="-150 -30"/>
+            <geom type="cylinder" size="0.02 0.1" fromto="0 0 0 0 0 -0.1" rgba=".1 .8 .1 1"/>
+          </body>
+        </body>
+      </body>
+
+      <!-- Front-Right Leg (and others...) -->
+       <body name="FR_hip" pos="0.15 -0.12 0">
+        <joint name="FR_hip_joint" type="hinge" axis="1 0 0" pos="0 0 0" range="-45 45"/>
+        <geom type="cylinder" size="0.03 0.02" fromto="0 0 0 0 -0.04 0" rgba=".1 .1 .8 1"/>
+        <body name="FR_thigh" pos="0 -0.04 0">
+          <joint name="FR_thigh_joint" type="hinge" axis="0 1 0" pos="0 0 0" range="-120 120"/>
+          <geom type="cylinder" size="0.025 0.1" fromto="0 0 0 0 0 -0.1" rgba=".1 .1 .8 1"/>
+          <body name="FR_calf" pos="0 0 -0.1">
+            <joint name="FR_calf_joint" type="hinge" axis="0 1 0" pos="0 0 0" range="-150 -30"/>
+            <geom type="cylinder" size="0.02 0.1" fromto="0 0 0 0 0 -0.1" rgba=".1 .1 .8 1"/>
+          </body>
+        </body>
+      </body>
+
+      <body name="RL_hip" pos="-0.15 0.12 0">
+        <joint name="RL_hip_joint" type="hinge" axis="1 0 0" pos="0 0 0" range="-45 45"/>
+        <geom type="cylinder" size="0.03 0.02" fromto="0 0 0 0 0.04 0" rgba=".8 .8 .1 1"/>
+        <body name="RL_thigh" pos="0 0.04 0">
+          <joint name="RL_thigh_joint" type="hinge" axis="0 1 0" pos="0 0 0" range="-120 120"/>
+          <geom type="cylinder" size="0.025 0.1" fromto="0 0 0 0 0 -0.1" rgba=".8 .8 .1 1"/>
+          <body name="RL_calf" pos="0 0 -0.1">
+            <joint name="RL_calf_joint" type="hinge" axis="0 1 0" pos="0 0 0" range="-150 -30"/>
+            <geom type="cylinder" size="0.02 0.1" fromto="0 0 0 0 0 -0.1" rgba=".8 .8 .1 1"/>
+          </body>
+        </body>
+      </body>
+
+      <body name="RR_hip" pos="-0.15 -0.12 0">
+        <joint name="RR_hip_joint" type="hinge" axis="1 0 0" pos="0 0 0" range="-45 45"/>
+        <geom type="cylinder" size="0.03 0.02" fromto="0 0 0 0 -0.04 0" rgba=".8 .1 .8 1"/>
+        <body name="RR_thigh" pos="0 -0.04 0">
+          <joint name="RR_thigh_joint" type="hinge" axis="0 1 0" pos="0 0 0" range="-120 120"/>
+          <geom type="cylinder" size="0.025 0.1" fromto="0 0 0 0 0 -0.1" rgba=".8 .1 .8 1"/>
+          <body name="RR_calf" pos="0 0 -0.1">
+            <joint name="RR_calf_joint" type="hinge" axis="0 1 0" pos="0 0 0" range="-150 -30"/>
+            <geom type="cylinder" size="0.02 0.1" fromto="0 0 0 0 0 -0.1" rgba=".8 .1 .8 1"/>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+      <motor joint="FL_hip_joint"   ctrllimited="true" ctrlrange="-10.0 10.0" gear="10"/>
+      <motor joint="FL_thigh_joint" ctrllimited="true" ctrlrange="-10.0 10.0" gear="10"/>
+      <motor joint="FL_calf_joint"  ctrllimited="true" ctrlrange="-10.0 10.0" gear="10"/>
+      <motor joint="FR_hip_joint"   ctrllimited="true" ctrlrange="-10.0 10.0" gear="10"/>
+      <motor joint="FR_thigh_joint" ctrllimited="true" ctrlrange="-10.0 10.0" gear="10"/>
+      <motor joint="FR_calf_joint"  ctrllimited="true" ctrlrange="-10.0 10.0" gear="10"/>
+      <motor joint="RL_hip_joint"   ctrllimited="true" ctrlrange="-10.0 10.0" gear="10"/>
+      <motor joint="RL_thigh_joint" ctrllimited="true" ctrlrange="-10.0 10.0" gear="10"/>
+      <motor joint="RL_calf_joint"  ctrllimited="true" ctrlrange="-10.0 10.0" gear="10"/>
+      <motor joint="RR_hip_joint"   ctrllimited="true" ctrlrange="-10.0 10.0" gear="10"/>
+      <motor joint="RR_thigh_joint" ctrllimited="true" ctrlrange="-10.0 10.0" gear="10"/>
+      <motor joint="RR_calf_joint"  ctrllimited="true" ctrlrange="-10.0 10.0" gear="10"/>
+  </actuator>
+</mujoco>
