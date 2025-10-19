@@ -21,6 +21,11 @@ def look_at(vec):
     
     return np.array([right, up, vec]).T
 
+# Geoms
+GEOMS_TO_TOGGLE = [
+    "RR_hip_geom", "RR_thigh_geom", "RR_calf_geom", "RR_foot_geom"
+]
+
 # --- CONFIGURATION ---
 MODEL_PATH = "New_with_feet.zip"
 
@@ -49,6 +54,19 @@ if args.load_model:
 else:
     print("Running without RL model (using zero actions).")
 
+##
+# --- Store original geom alphas for toggling ---
+original_geom_alphas = {}
+geom_ids_to_toggle = []
+for geom_name in GEOMS_TO_TOGGLE:
+    geom_id = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
+    if geom_id != -1:
+        original_alpha = env.model.geom_rgba[geom_id][3]
+        original_geom_alphas[geom_id] = original_alpha
+        geom_ids_to_toggle.append(geom_id)
+        print(f"Found geom to toggle: {geom_name} (ID: {geom_id})")
+    else:
+        print(f"WARNING: Geom not found: {geom_name}")
 
 # --- Manual Viewer Setup ---
 mujoco.glfw.glfw.init()
@@ -114,6 +132,7 @@ print("="*50 + "\n")
 paused = True
 show_forces = True
 show_sensor_forces = True
+hide_robot_geoms = False
 opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTFORCE] = show_forces
 
 env.model.vis.scale.forcewidth = 0.05
@@ -136,6 +155,7 @@ site_size = np.array([0.02, 0.02, 0.02]) # Sphere size
 last_space_state = mujoco.glfw.glfw.RELEASE
 last_f_state = mujoco.glfw.glfw.RELEASE
 last_g_state = mujoco.glfw.glfw.RELEASE
+last_h_state = mujoco.glfw.glfw.RELEASE
 
 # --- Main Simulation Loop ---
 try:
@@ -159,6 +179,7 @@ try:
         space_state = mujoco.glfw.glfw.get_key(window, mujoco.glfw.glfw.KEY_SPACE)
         f_state = mujoco.glfw.glfw.get_key(window, mujoco.glfw.glfw.KEY_F)
         g_state = mujoco.glfw.glfw.get_key(window, mujoco.glfw.glfw.KEY_G)
+        h_state = mujoco.glfw.glfw.get_key(window, mujoco.glfw.glfw.KEY_H)
 
         if space_state == mujoco.glfw.glfw.PRESS and last_space_state == mujoco.glfw.glfw.RELEASE:
             paused = not paused
@@ -172,11 +193,24 @@ try:
         if g_state == mujoco.glfw.glfw.PRESS and last_g_state == mujoco.glfw.glfw.RELEASE:
             show_sensor_forces = not show_sensor_forces
             print(f"\rSensor Contact Forces {'ON' if show_sensor_forces else 'OFF'}    ", end="")
+        if h_state == mujoco.glfw.glfw.PRESS and last_h_state == mujoco.glfw.glfw.RELEASE:
+            hide_robot_geoms = not hide_robot_geoms
+            
+            for geom_id in geom_ids_to_toggle:
+                if hide_robot_geoms:
+                    # Set alpha to 0 (invisible)
+                    env.model.geom_rgba[geom_id][3] = 0.0
+                else:
+                    # Restore original alpha
+                    env.model.geom_rgba[geom_id][3] = original_geom_alphas[geom_id]
+            
+            print(f"\rRobot Geoms {'HIDDEN' if hide_robot_geoms else 'VISIBLE'}    ", end="")
 
         last_space_state = space_state
         last_f_state = f_state
         last_g_state = g_state
-        
+        last_h_state = h_state
+
         # --- Rendering ---
         viewport_width, viewport_height = mujoco.glfw.glfw.get_framebuffer_size(window)
         viewport = mujoco.MjrRect(0, 0, viewport_width, viewport_height)
