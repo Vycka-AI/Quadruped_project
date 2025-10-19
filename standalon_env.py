@@ -23,7 +23,7 @@ def look_at(vec):
 
 # Geoms
 GEOMS_TO_TOGGLE = [
-    "RR_hip_geom", "RR_thigh_geom", "RR_calf_geom", "RR_foot_geom"
+    "FR_calf", "FL_calf", "RR_calf", "RL_calf"
 ]
 
 # --- CONFIGURATION ---
