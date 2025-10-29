@@ -1,0 +1,31 @@
+<mujoco model="go2 suspended scene">
+  <option integrator="RK4" timestep="0.01" gravity="0 0 0"/>
+  <!-- 1. Include the robot definition from your go2.xml file -->
+  <include file="go2.xml"/>
+
+  <!-- Optional: Visual settings for a clean look -->
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="90" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+  </asset>
+
+  <!-- 2. The worldbody is minimal. It has a light but NO floor geom -->
+  <worldbody>
+    <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
+  </worldbody>
+
+  <!-- 3. This is the key part to suspend the robot. -->
+  <equality>
+    <!--
+      This weld constraint finds the body named 'base_link' (from go2.xml)
+      and locks it to the world frame. This effectively disables the freejoint
+      and holds the robot's body perfectly still in the air.
+    -->
+    <weld body1="base_link" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+  </equality>
+</mujoco>

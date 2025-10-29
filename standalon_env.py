@@ -22,8 +22,16 @@ def look_at(vec):
     return np.array([right, up, vec]).T
 
 # Geoms
-GEOMS_TO_TOGGLE = [
-    "FR_calf", "FL_calf", "RR_calf", "RL_calf"
+BODIES_TO_TOGGLE = [
+    "base_link", 
+    #"FL_hip", "FL_thigh", 
+    "FL_calf",
+    #"FR_hip", "FR_thigh", 
+    "FR_calf",
+    #"RL_hip", "RL_thigh", 
+    "RL_calf",
+    #"RR_hip", "RR_thigh", 
+    "RR_calf"
 ]
 
 # --- CONFIGURATION ---
@@ -58,15 +66,36 @@ else:
 # --- Store original geom alphas for toggling ---
 original_geom_alphas = {}
 geom_ids_to_toggle = []
-for geom_name in GEOMS_TO_TOGGLE:
-    geom_id = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
-    if geom_id != -1:
-        original_alpha = env.model.geom_rgba[geom_id][3]
-        original_geom_alphas[geom_id] = original_alpha
-        geom_ids_to_toggle.append(geom_id)
-        print(f"Found geom to toggle: {geom_name} (ID: {geom_id})")
-    else:
-        print(f"WARNING: Geom not found: {geom_name}")
+
+# From your XML: <default class="visual"> <geom ... group="2"/> </default>
+VISUAL_GEOM_GROUP = 2 
+
+print("Finding geoms to toggle...")
+for body_name in BODIES_TO_TOGGLE:
+    body_id = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+    if body_id == -1:
+        print(f"WARNING: Body not found: {body_name}")
+        continue
+    
+    # print(f"Found body: {body_name} (ID: {body_id}). Finding attached visual geoms...")
+    
+    # Iterate through all geoms in the model
+    for geom_id in range(env.model.ngeom):
+        # Check if this geom belongs to the target body
+        if env.model.geom_bodyid[geom_id] == body_id:
+            # Check if it's a visual geom (based on XML)
+            if env.model.geom_group[geom_id] == VISUAL_GEOM_GROUP:
+                # This is a visual geom attached to our target body.
+                if geom_id not in geom_ids_to_toggle:
+                    original_alpha = env.model.geom_rgba[geom_id][3]
+                    original_geom_alphas[geom_id] = original_alpha
+                    geom_ids_to_toggle.append(geom_id)
+                    
+                    # Try to get a name for logging, even if it's empty
+                    geom_name = mujoco.mj_id2name(env.model, mujoco.mjtObj.mjOBJ_GEOM, geom_id)
+                    # print(f"  -> Added geom ID: {geom_id} (Name: '{geom_name if geom_name else 'N/A'}')")
+
+print(f"\nFound {len(geom_ids_to_toggle)} visual geoms to toggle.")
 
 # --- Manual Viewer Setup ---
 mujoco.glfw.glfw.init()
