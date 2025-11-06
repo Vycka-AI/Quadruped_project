@@ -3,7 +3,7 @@ import argparse
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.callbacks import CheckpointCallback
-from unitree_env import UnitreeEnv
+from copied_isaac import UnitreeEnv
 from torch.nn import ELU
 
 # --- Argument parsing ---
@@ -22,7 +22,7 @@ env = make_vec_env(env_id, n_envs=num_cpu)
 
 # --- Model save path ---
 
-model_name = "Naujas"
+model_name = "New_PDZ"
 
 folder = "models/Current/"
 model_save_path = folder + model_name + ".zip"
@@ -37,7 +37,8 @@ else:
     print(f"--- Starting new training on {num_cpu} environments ---")
     policy_kwargs = dict(
         activation_fn=ELU,
-        net_arch=dict(pi=[512, 256, 128], vf=[512, 256, 128])
+        net_arch=dict(pi=[512, 256, 128], vf=[512, 256, 128]),
+        log_std_init=0.0
     )
     model = PPO(
         "MlpPolicy",
@@ -45,7 +46,7 @@ else:
         verbose=1,
         device='cpu',
         n_steps=2048,
-        ent_coef=0.03,
+        ent_coef=0.005,
         tensorboard_log=TENSORBOARD_LOG_DIR,
         policy_kwargs=policy_kwargs
     )
