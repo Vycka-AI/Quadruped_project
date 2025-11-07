@@ -23,7 +23,7 @@ env = make_vec_env(env_id, n_envs=num_cpu)
 # --- Model save path ---
 
 
-model_name = "Ballsac_v3"
+model_name = "New_from_lecture"
 relearn = "Ballsac_vv"
 
 folder = "models/Current/"
@@ -47,12 +47,12 @@ if os.path.exists(load_relearn):
         verbose=1,
         device='cuda',
         # --- Key SAC parameters ---
-        buffer_size=2_000_000, # (int) Size of the replay buffer
+        buffer_size=3_000_000, # (int) Size of the replay buffer
         learning_starts=100_000,  # (int) How many steps to take before starting to learn
         batch_size=256,         # (int) Mini-batch size for each gradient update
         # ---
         ent_coef='auto',        # <-- Let SAC automatically tune the entropy bonus!
-        gradient_steps=4,
+        gradient_steps=6,
         tensorboard_log=TENSORBOARD_LOG_DIR,
         policy_kwargs=policy_kwargs
     )

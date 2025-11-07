@@ -48,7 +48,7 @@ class UnitreeEnv(gym.Env): # Or your specific base class
         # --- SET YOUR SAFETY MARGIN (AS A PERCENTAGE) ---
         # 5% (0.05) is a good start. This means a joint with 10 radians of
         # total motion will get a 0.5 rad offset on each end.
-        self.joint_limit_margin_percentage = 0.05 
+        self.joint_limit_margin_percentage = 0.25
 
         # --- 1. GET HARD (PHYSICAL) LIMITS ---
         # Get limits from the MuJoCo model
@@ -122,7 +122,7 @@ class UnitreeEnv(gym.Env): # Or your specific base class
 
 
         self.step_counter = 0
-        self.max_episode_length = 3000 # Example: 1000 steps
+        self.max_episode_length = 6000 # Example: 1000 steps
 
 
         self.termination_geom_indices = []
@@ -165,24 +165,25 @@ class UnitreeEnv(gym.Env): # Or your specific base class
             "lin_vel_z": -2.0 * self.dt,
             "ang_vel_xy": -0.05 * self.dt,
             "orientation": -2.0 * self.dt, # Default is 0
-            "base_height": -0.0 * self.dt, # Default is 0
+            "base_height": -5.0 * self.dt, # Default is 0
             "torques": -0.00002 * self.dt, # From GO2RoughCfg
             "dof_vel": -0.0 * self.dt, # Default is 0
             "dof_acc": -2.5e-7 * self.dt,
             "action_rate": -0.00 * self.dt,
             "collision": -1.0 * self.dt,
-            "termination": -10.0, # Default is 0
+            "termination": -12.0, # Default is 0
             "dof_pos_limits": -20.0 * self.dt, # From GO2RoughCfg
             "dof_vel_limits": 0.0, # Default not specified or 0
             "torque_limits": 0.0, # Default not specified or 0
-            "tracking_lin_vel": 2.0,# * self.dt,
+            "tracking_lin_vel": 10.0,# * self.dt,
             "tracking_ang_vel": 1.0,# * self.dt,
             "feet_air_time": 1.0 * self.dt,
             "stumble": -0.0 * self.dt, # Default is 0
             "stand_still": -2.0 * self.dt, # Default is 0
             "feet_contact_forces": 0.0, # Default not specified or 0
-            "living_bonus": 1.0 * self.dt, # <-- ADD THIS REWARD
-            "feet_stuck": -1.0 * self.dt
+            "living_bonus": 0.0,# * self.dt, # <-- ADD THIS REWARD
+            "feet_stuck": -1.0,
+            "large_tracking_error": -1.0
         }
         # Filter out zero scales for efficiency
         self.active_reward_scales = {k: v for k, v in self.reward_scales.items() if v != 0.0}
@@ -408,7 +409,7 @@ class UnitreeEnv(gym.Env): # Or your specific base class
         self.step_counter += 1
         # -------------------------------
 
-        resampling_time_steps = int(5.0 / self.dt) 
+        resampling_time_steps = int(3.0 / self.dt) 
         if self.step_counter % resampling_time_steps == 0:
             self._resample_commands()
 
@@ -583,6 +584,30 @@ class UnitreeEnv(gym.Env): # Or your specific base class
     
     # --- Make sure to use self.base_lin_vel, self.base_ang_vel etc.
     # --- which are updated in _get_obs()
+    def _reward_large_tracking_error(self):
+        """
+        Penalizes the agent for a large velocity tracking error
+        when a non-zero command is given.
+        """
+        command_norm = np.linalg.norm(self.commands[:2])
+        if command_norm > 0.2: # Only penalize if commanded to move
+            
+            # Calculate the squared error, just like in _reward_tracking_lin_vel
+            lin_vel_error_sq = np.sum(np.square(self.commands[:2] - self.base_lin_vel[:2]))
+            
+            # Define a threshold for "too high" error.
+            # 1.0 m/s error squared = (1.0)^2 = 1.0
+            # 0.8 m/s error squared = (0.8)^2 = 0.64
+            # Let's use 0.5 m/s as the "failure" threshold
+            error_threshold_sq = 0.25 # (0.5 m/s)^2
+            
+            if lin_vel_error_sq > error_threshold_sq:
+                # Penalize based on how bad the error is
+                # This returns a value from 0 up to 1.0
+                penalty = np.clip((lin_vel_error_sq - error_threshold_sq) / (4.0 - error_threshold_sq), 0, 1.0)
+                return penalty
+        
+        return 0.0 # No penalty
 
     def _reward_feet_stuck(self):
         """

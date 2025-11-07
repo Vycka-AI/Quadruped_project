@@ -12,7 +12,7 @@ env = UnitreeEnv(
 )
 
 # Load the trained agent
-model = SAC.load("models/Best/Ballsac_v3.zip", env=env)
+model = SAC.load("models/Backup/New_from_lecture/rl_model_v2__3200000_steps.zip", env=env)
 
 
 

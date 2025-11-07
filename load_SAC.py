@@ -16,50 +16,53 @@ env_id = lambda: UnitreeEnv(
     model_path='../unitree_mujoco/unitree_robots/go2/scene_ground.xml'
 )
 
-TENSORBOARD_LOG_DIR = "./ppo_go2_tensorboard/"
-num_cpu = 16  # Change this to match your machine
+TENSORBOARD_LOG_DIR = "./SAC_go2_tensorboard/"
+num_cpu = 80  # Change this to match your machine
 env = make_vec_env(env_id, n_envs=num_cpu)
 
 # --- Model save path ---
 
-model_name = "New_Try"
+
+model_name = "New_from_lecture_v2"
+relearn = "New_from_lecture"
 
 folder = "models/Current/"
 model_save_path = folder + model_name + ".zip"
 buffer_save_path = folder + model_name + "-buff.pkl"
+buffer_load_path = folder + relearn + "-buff.pkl"
+load_relearn = folder + relearn + ".zip"
 checkpoint_dir = "models/Backup/" + model_name + "/"
 os.makedirs(checkpoint_dir, exist_ok=True)
 
 # --- Load or create model ---
-if os.path.exists(model_save_path):
-    print(f"--- Loading model and continuing training on {num_cpu} environments ---")
-    model = SAC.load(model_save_path, env=env, tensorboard_log=TENSORBOARD_LOG_DIR)
-else:
-    print(f"--- Starting new training on {num_cpu} environments ---")
-    policy_kwargs = dict(
-        activation_fn=ELU,
-        net_arch=dict(pi=[512, 256, 128], qf=[512, 256, 128]),
-        log_std_init=0.0
-    )
-    model = SAC(
-        "MlpPolicy",
-        env,
-        verbose=1,
-        device='cuda',
-        # --- Key SAC parameters ---
-        buffer_size=2_000_000, # (int) Size of the replay buffer
-        learning_starts=50000,  # (int) How many steps to take before starting to learn
-        batch_size=256,         # (int) Mini-batch size for each gradient update
-        # ---
-        ent_coef='auto',        # <-- Let SAC automatically tune the entropy bonus!
-        gradient_steps=4,
-        tensorboard_log=TENSORBOARD_LOG_DIR,
-        policy_kwargs=policy_kwargs
-    )
+print(f"--- Loading model and continuing training on {num_cpu} environments ---")
+policy_kwargs = dict(
+    activation_fn=ELU,
+    net_arch=dict(pi=[512, 256, 128], qf=[512, 256, 128]),
+    log_std_init=0.0
+)
+model = SAC(
+    "MlpPolicy",
+    env,
+    verbose=1,
+    device='cuda',
+    # --- Key SAC parameters ---
+    buffer_size=3_000_000, # (int) Size of the replay buffer
+    learning_starts=100_000,  # (int) How many steps to take before starting to learn
+    batch_size=256,         # (int) Mini-batch size for each gradient update
+    # ---
+    ent_coef='auto',        # <-- Let SAC automatically tune the entropy bonus!
+    gradient_steps=6,
+    tensorboard_log=TENSORBOARD_LOG_DIR,
+    policy_kwargs=policy_kwargs
+)
+
+model.set_parameters(load_relearn)
+model.load_replay_buffer(buffer_load_path)
 
 # --- Checkpoint callback (save every 100k steps) ---
 checkpoint_callback = CheckpointCallback(
-    save_freq=100_000 // num_cpu,  # adjusted for vectorized envs
+    save_freq=100_000// num_cpu,  # adjusted for vectorized envs
     save_path=checkpoint_dir,
     name_prefix="rl_model_v2_"
 )
