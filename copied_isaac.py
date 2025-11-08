@@ -48,7 +48,7 @@ class UnitreeEnv(gym.Env): # Or your specific base class
         # --- SET YOUR SAFETY MARGIN (AS A PERCENTAGE) ---
         # 5% (0.05) is a good start. This means a joint with 10 radians of
         # total motion will get a 0.5 rad offset on each end.
-        self.joint_limit_margin_percentage = 0.25
+        self.joint_limit_margin_percentage = 0.3
 
         # --- 1. GET HARD (PHYSICAL) LIMITS ---
         # Get limits from the MuJoCo model
@@ -111,7 +111,7 @@ class UnitreeEnv(gym.Env): # Or your specific base class
 
         # Example PD Gains (Adapt from GO2RoughCfg.control)
         # Assuming stiffness=20, damping=0.5 for all joints
-        self.p_gains = np.full(self.model.nu, 20.0)
+        self.p_gains = np.full(self.model.nu, 25.0)
         self.d_gains = np.full(self.model.nu, 0.5)
 
 
@@ -177,12 +177,12 @@ class UnitreeEnv(gym.Env): # Or your specific base class
             "torque_limits": 0.0, # Default not specified or 0
             "tracking_lin_vel": 10.0,# * self.dt,
             "tracking_ang_vel": 1.0,# * self.dt,
-            "feet_air_time": 1.0 * self.dt,
+            "feet_air_time": 3.0,
             "stumble": -0.0 * self.dt, # Default is 0
             "stand_still": -2.0 * self.dt, # Default is 0
             "feet_contact_forces": 0.0, # Default not specified or 0
             "living_bonus": 0.0,# * self.dt, # <-- ADD THIS REWARD
-            "feet_stuck": -1.0,
+            "feet_stuck": 0.0,
             "large_tracking_error": -1.0
         }
         # Filter out zero scales for efficiency

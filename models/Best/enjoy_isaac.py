@@ -1,6 +1,6 @@
 import time
-from stable_baselines3 import PPO
-from unitree_env import UnitreeEnv
+from stable_baselines3 import SAC
+from copied_isaac import UnitreeEnv
 import mujoco
 import mujoco.viewer
 import numpy as np
@@ -12,7 +12,9 @@ env = UnitreeEnv(
 )
 
 # Load the trained agent
-model = PPO.load("models/Best/New_with_feet", env=env)
+model = SAC.load("models/Backup/Feet_up/rl_model_v2__42000000_steps", env=env)
+
+
 
 obs, info = env.reset()
 
@@ -36,6 +38,8 @@ with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
     # This scales the length of the force vector arrows based on magnitude.
     env.model.vis.map.force = 0.5
 
+
+
     # --- Main Simulation Loop ---
     while viewer.is_running():
         action, _states = model.predict(obs, deterministic=True)
@@ -44,10 +48,10 @@ with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
         if terminated or truncated:
             print("Episode finished. Resetting.")
             obs, info = env.reset()
-        
+            print("Commands are {}".format(env.commands))
         # viewer.sync() is handled by the context manager, but calling it
         # ensures updates if you add manual steps or pauses.
         viewer.sync()
 
         # Optional: add a small delay to watch it in slow-motion
-        time.sleep(1/60)
+        #time.sleep(1/60)
