@@ -162,27 +162,27 @@ class UnitreeEnv(gym.Env): # Or your specific base class
         # Multiply by dt (assuming dt = frame_skip * model.opt.timestep)
         self.dt = frame_skip * self.model.opt.timestep # Example calculation
         self.reward_scales = {
-            "lin_vel_z": -2.0 * self.dt,
-            "ang_vel_xy": -0.05 * self.dt,
-            "orientation": -2.0 * self.dt, # Default is 0
-            "base_height": -5.0 * self.dt, # Default is 0
-            "torques": -0.00002 * self.dt, # From GO2RoughCfg
-            "dof_vel": -0.0 * self.dt, # Default is 0
-            "dof_acc": -2.5e-7 * self.dt,
-            "action_rate": -0.00 * self.dt,
-            "collision": -1.0 * self.dt,
+            "lin_vel_z": -0.2,
+            "ang_vel_xy": -0.05,
+            "orientation": -1.0, # Default is 0
+            "base_height": -5.0, # Default is 0
+            "torques": -0.0002, # From GO2RoughCfg
+            "dof_vel": -0.01, # Default is 0
+            "dof_acc": -2.5e-7,
+            "action_rate": -0.01,
+            "collision": -0.1,
             "termination": -12.0, # Default is 0
-            "dof_pos_limits": -20.0 * self.dt, # From GO2RoughCfg
+            "dof_pos_limits": -10.0, # From GO2RoughCfg
             "dof_vel_limits": 0.0, # Default not specified or 0
             "torque_limits": 0.0, # Default not specified or 0
-            "tracking_lin_vel": 10.0,# * self.dt,
+            "tracking_lin_vel": 4.0,# * self.dt,
             "tracking_ang_vel": 1.0,# * self.dt,
-            "feet_air_time": 3.0,
-            "stumble": -0.0 * self.dt, # Default is 0
-            "stand_still": -2.0 * self.dt, # Default is 0
+            "feet_air_time": 1.0,
+            "stumble": -0.0, # Default is 0
+            "stand_still": -0.1, # Default is 0
             "feet_contact_forces": 0.0, # Default not specified or 0
             "living_bonus": 0.0,# * self.dt, # <-- ADD THIS REWARD
-            "feet_stuck": 0.0,
+            "feet_stuck": -1.0,
             "large_tracking_error": -1.0
         }
         # Filter out zero scales for efficiency
