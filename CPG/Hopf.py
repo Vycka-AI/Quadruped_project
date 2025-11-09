@@ -38,6 +38,9 @@ class HopfOscillator:
         
         # Return the current state
         return self.x, self.y
+    def get_state(self):
+        """Returns the current x, y state."""
+        return np.array([self.x, self.y])
 
 def main():
     # --- Simulation Parameters ---

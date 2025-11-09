@@ -5,14 +5,14 @@ import mujoco.viewer # <-- ADD THIS
 # Add torch if you want rewards calculated with it, otherwise use numpy
 import torch 
 import time
-# Or use numpy directly:
-# import numpy as torch # Alias numpy to torch for easier copy-pasting
+from CPG_Network import CPGNetwork
 
-# Assuming you have your UnitreeEnv class inheriting from gym.Env or similar
-
-class UnitreeEnv(gym.Env): # Or your specific base class
-    def __init__(self, model_path, render_mode=None, frame_skip=1, **kwargs):
+class UnitreeEnv(gym.Env):
+    def __init__(self, model_path, render_mode=None, frame_skip=4, **kwargs):
         super().__init__()
+        #self.calf_joint_indices = np.array([2, 5, 8, 11])
+        #self.calf_joint_indices = np.array([1, 4, 7, 10])
+        self.calf_joint_indices = np.array([0, 3, 6, 9])
         self.frame_skip = frame_skip
         self.render_mode = render_mode
         self.viewer = None
@@ -21,146 +21,74 @@ class UnitreeEnv(gym.Env): # Or your specific base class
         self.data = mujoco.MjData(self.model)
 
         if self.render_mode == "human":
-            # Launch the passive viewer
             self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
 
-        # --- Store initial state for resets and pose penalty ---
         self.init_qpos = self.data.qpos.copy()
-        self.init_qpos[2] = 0.325
+        #self.init_qpos[2] = 0.325
+        
         self.init_qvel = self.data.qvel.copy()
-
-        # --- Define Constants (Adapt these from legged_gym configs) ---
-        self.action_scale = 0.05 # From GO2RoughCfg.control
-        # Example default pose (Adapt from GO2RoughCfg.init_state.default_joint_angles)
-        # Ensure the order matches your MuJoCo joint order!
         
         self.default_dof_pos = np.array([
-            -0.15,  0.8, -1.5,  # FR_hip_joint, FR_thigh_joint, FR_calf_joint
-            0.15,  0.8, -1.5,  # FL_hip_joint, FL_thigh_joint, FL_calf_joint
-            -0.15,  1.0, -1.5,  # RR_hip_joint, RR_thigh_joint, RR_calf_joint
-            0.15,  1.0, -1.5   # RL_hip_joint, RL_thigh_joint, RL_calf_joint
+            0.15,  0.8, -1.5,  # FR_hip_joint, FR_thigh_joint, FR_calf_joint
+            -0.15,  0.8, -1.5,  # FL_hip_joint, FL_thigh_joint, FL_calf_joint
+            0.15,  1.0, -1.5,  # RR_hip_joint, RR_thigh_joint, RR_calf_joint
+            -0.15,  1.0, -1.5   # RL_hip_joint, RL_thigh_joint, RL_calf_joint
         ])
 
         self.init_qpos[7:] = self.default_dof_pos
 
-
-
-        # --- SET YOUR SAFETY MARGIN (AS A PERCENTAGE) ---
-        # 5% (0.05) is a good start. This means a joint with 10 radians of
-        # total motion will get a 0.5 rad offset on each end.
-        self.joint_limit_margin_percentage = 0.3
-
-        # --- 1. GET HARD (PHYSICAL) LIMITS ---
-        # Get limits from the MuJoCo model
-        # Slice from [1:13] to skip the base joint (at index 0)
-        hard_limits = self.model.jnt_range[1:13].copy()
-        hard_min = hard_limits[:, 0]
-        hard_max = hard_limits[:, 1]
-        
-        # --- 2. CALCULATE DYNAMIC OFFSET (THE NEW LOGIC) ---
-        # Calculate total amplitude (range) of each joint
-        total_amplitude = hard_max - hard_min
-        # Calculate the offset for each joint (e.g., 5% of its total amplitude)
-        dynamic_offset = total_amplitude * self.joint_limit_margin_percentage
-
-        # --- 3. APPLY OFFSET TO CREATE SOFT (SAFE) LIMITS ---
-        self.soft_jnt_min = hard_min + dynamic_offset
-        self.soft_jnt_max = hard_max - dynamic_offset
-
-        # --- 4. PRE-CALCULATE SCALES (MORE EFFICIENT) ---
-        # (self.default_dof_pos is defined in __init__)
-        self.scale_to_max = self.soft_jnt_max - self.default_dof_pos
-        self.scale_to_min = self.default_dof_pos - self.soft_jnt_min
-
-        # --- 5. SANITY CHECK (UPDATED) ---
-        if np.any(self.scale_to_max < 0) or np.any(self.scale_to_min < 0):
-            print("\n" + "="*80)
-            print("ERROR: YOUR 'default_dof_pos' IS OUTSIDE YOUR NEW 'soft_limits'.")
-            print("This means your 'joint_limit_margin_percentage' is too large or 'default_dof_pos' is wrong.")
-            print("\n--- DEBUG INFO ---")
-            
-            print(f"\nJoint Limit Margin Percentage: {self.joint_limit_margin_percentage}")
-            
-            # Use np.round for cleaner output
-            print("\nTotal Joint Amplitude (hard_max - hard_min):")
-            print(np.round(total_amplitude, 3))
-
-            print("\nDynamic Offset (amplitude * percentage):")
-            print(np.round(dynamic_offset, 3))
-
-            print("\nSoft Min Limits (hard_min + offset):")
-            print(np.round(self.soft_jnt_min, 3))
-            
-            print("\nDefault DOF Position:")
-            print(np.round(self.default_dof_pos, 3))
-            
-            print("\nSoft Max Limits (hard_max - offset):")
-            print(np.round(self.soft_jnt_max, 3))
-            
-            print("\n--- CALCULATED SCALES (MUST ALL BE >= 0) ---")
-            print("\nScale to Max (soft_max - default):")
-            print(np.round(self.scale_to_max, 3))
-            
-            print("\nScale to Min (default - soft_min):")
-            print(np.round(self.scale_to_min, 3))
-
-            print("\n" + "="*80)
-
-
-
-
-        # Example PD Gains (Adapt from GO2RoughCfg.control)
-        # Assuming stiffness=20, damping=0.5 for all joints
-        self.p_gains = np.full(self.model.nu, 25.0)
-        self.d_gains = np.full(self.model.nu, 0.5)
-
+        self.p_gains = np.full(self.model.nu, 35.0)  # VERY low P-gain
+        self.d_gains = np.full(self.model.nu, 1.0)  # VERY low D-gain
+        #self.p_gains = np.full(self.model.nu, 0.0)  # VERY low P-gain
+        #self.d_gains = np.full(self.model.nu, 0.0)  # VERY low D-gain
 
         self.obs_scales_lin_vel = 2.0
-        self.obs_scales_ang_vel = 0.25     # <--- SCALE IT
-        self.obs_scales_dof_pos = 1.0 # <--- SCALE IT
-        self.obs_scales_dof_vel = 0.05           # <--- SCALE IT
-
+        self.obs_scales_ang_vel = 0.25
+        self.obs_scales_dof_pos = 1.0
+        self.obs_scales_dof_vel = 0.05
 
         self.step_counter = 0
-        self.max_episode_length = 6000 # Example: 1000 steps
-
+        self.max_episode_length = 6000
 
         self.termination_geom_indices = []
         self.penalised_geom_indices = []
-
         self.base_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'base_link')
         
-        # Get IDs for penalized bodies (from GO2RoughCfg.asset.penalize_contacts_on)
         penalized_body_names = ["FL_thigh", "FL_calf", "FR_thigh", "FR_calf", 
                                 "RL_thigh", "RL_calf", "RR_thigh", "RR_calf"]
         self.penalized_body_ids = {mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, name) 
-                            for name in penalized_body_names}
+                           for name in penalized_body_names}
 
         for i in range(self.model.ngeom):
             geom_body_id = self.model.geom_bodyid[i]
-            
-            # Check if this geom's parent body is the 'base_link'
             if geom_body_id == self.base_body_id:
-                # We also check its 'contype' to make sure it's a collision geom
-                # (contype > 0 means it can collide)
                 if self.model.geom_contype[i] > 0:
                     self.termination_geom_indices.append(i)
-                
-            # Check if this geom's parent body is in the penalized list
             if geom_body_id in self.penalized_body_ids:
                 if self.model.geom_contype[i] > 0:
                     self.penalised_geom_indices.append(i)
         
         self.termination_geom_indices = np.array(self.termination_geom_indices)
         self.penalised_geom_indices = np.array(self.penalised_geom_indices)
-
+        
         print(f"Found {len(self.termination_geom_indices)} termination geoms (base).")
         print(f"Found {len(self.penalised_geom_indices)} penalized geoms (thighs/calves).")
 
+        self.dt = frame_skip * self.model.opt.timestep
+        self.reward_scales = {
+             # ... (your reward scales)
+        }
+        
+        # --- (your other __init__ code) ---
+        
+        self.tracking_sigma = 0.25
+        self.base_height_target = 0.25
+        self.soft_dof_pos_limit = 0.9
+        self.soft_dof_vel_limit = 1.0
+        self.soft_torque_limit = 1.0
+        self.max_contact_force = 100.0
 
-        # Reward Scales (Adapt from LeggedRobotCfg.rewards.scales and GO2RoughCfg.rewards.scales)
-        # Multiply by dt (assuming dt = frame_skip * model.opt.timestep)
-        self.dt = frame_skip * self.model.opt.timestep # Example calculation
+
         self.reward_scales = {
             "lin_vel_z": -0.2,
             "ang_vel_xy": -0.05,
@@ -185,84 +113,89 @@ class UnitreeEnv(gym.Env): # Or your specific base class
             "feet_stuck": -1.0,
             "large_tracking_error": -1.0
         }
-        # Filter out zero scales for efficiency
+
         self.active_reward_scales = {k: v for k, v in self.reward_scales.items() if v != 0.0}
 
-        # Reward Function Configuration (Adapt from LeggedRobotCfg.rewards and GO2RoughCfg.rewards)
-        self.tracking_sigma = 0.25
-        self.base_height_target = 0.25 # From GO2RoughCfg
-        # You'll need soft limit factors if using dof_pos/vel/torque limit rewards
-        self.soft_dof_pos_limit = 0.9 # From GO2RoughCfg
-        self.soft_dof_vel_limit = 1.0 # From LeggedRobotCfg
-        self.soft_torque_limit = 1.0 # From LeggedRobotCfg
-        # You'll need max contact force if using feet_contact_forces reward
-        self.max_contact_force = 100.0 # From LeggedRobotCfg
-
-        # --- Indices (CRITICAL: Find these in your MuJoCo model) ---
         self.feet_indices = np.array([
             mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'FL_foot'),
             mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'FR_foot'),
             mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'RL_foot'),
             mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'RR_foot')
         ])
-        # Find geom indices associated with feet bodies for contact checking
         
-        # --- Observation/Action Space Definition ---
-        # Original obs size = 48
-        # New obs size = 48 + 4 (foot contacts) = 52
-        obs_high = np.inf * np.ones(52)
-        obs_low = -obs_high
-        self.observation_space = gym.spaces.Box(obs_low, obs_high, dtype=np.float32)
+        cpg_state_dim = 8
+        # --- CPG-RL SPACE DEFINITIONS ---
 
-        action_high = np.ones(self.model.nu) # Action is offset, typically [-1, 1]
+        # 1. DEFINE ACTION SPACE (8-dim)
+        # The agent outputs 8 values: 4 for amplitude, 4 for frequency
+        # All actions are in the normalized range [-1, 1]
+        action_dim = 8 
+        action_high = np.ones(action_dim)
         self.action_space = gym.spaces.Box(-action_high, action_high, dtype=np.float32)
 
-        # --- Buffers for Rewards and State History ---
-        self.commands = np.zeros(3) # x_vel, y_vel, yaw_vel_rate command
-        # You might need observation scaling factors if using them
-        # self.obs_scales_lin_vel = 2.0 # From LeggedRobotCfg.normalization.obs_scales
-        # self.obs_scales_ang_vel = 0.25 # etc.
-        self.last_actions = np.zeros(self.action_space.shape)
+        # 2. DEFINE OBSERVATION SPACE (52 + 8 = 60-dim)
+        # Original obs size = 52
+        # We add 8 CPG states (x, y for each of 4 oscillators)
+        cpg_state_dim = 4
+        obs_dim = 52 + cpg_state_dim # 60
+        
+        obs_high = np.inf * np.ones(obs_dim)
+        obs_low = -obs_high
+        self.observation_space = gym.spaces.Box(obs_low, obs_high, dtype=np.float32)
+        
+        # --- BUFFERS ---
+        self.commands = np.zeros(3) 
+        # last_actions is now 8-dim
+        self.last_actions = np.zeros(self.action_space.shape) 
+        # Buffer for the *previous* action (for action_rate reward)
+        self.prev_last_actions = np.zeros(self.action_space.shape)
+        # Buffer to store the CPG state for the observation
+        self.cpg_states = np.zeros(cpg_state_dim)
         self.last_dof_vel = np.zeros(self.model.nu)
         self.feet_air_time = np.zeros(len(self.feet_indices))
         self.last_contacts = np.zeros(len(self.feet_indices), dtype=bool)
         
-        # Buffers for PD control (optional, could be calculated in step)
         self.dof_pos = None
         self.dof_vel = None
         self.torques = np.zeros(self.model.nu)
 
-        # Buffers for state needed by rewards/observations
         self.base_lin_vel = np.zeros(3)
         self.base_ang_vel = np.zeros(3)
         self.projected_gravity = np.zeros(3)
 
         self.step_counter = 0
+        self.last_target_dof_pos = self.default_dof_pos.copy()
+        # ======================================================================
+        # --- CPG INITIALIZATION ---
+        # Create the CPG network, passing it the sim dt and base pose
+        self.cpg_network = CPGNetwork(dt=self.dt, base_positions=self.default_dof_pos)
+        # ======================================================================
 
-        # TODO: Add limits if needed for reward functions
-        # self.dof_pos_limits = ... # Read from model or set manually
-        # self.dof_vel_limits = ...
-        # self.torque_limits = ... # Control limits from model
-
-        # ... (rest of your __init__)
-
-    def _map_actions_to_targets(self, action):
+    # ... (your _get_contact_info, _get_obs, _sample_value functions) ...
+    # === PD CONTROLLER TEST PARAMETERS ===
+        self.run_oscillation_test = True # Set to True to run the test
+        self.test_amplitude = 0.5  # Radians (how far the joint moves)
+        self.test_frequency = 1.0  # Hz (how fast it moves, 1.0 = 1 cycle/sec)
+    def cyclic_step(self):
         """
-        Maps the normalized action output [-1, 1] to the safe
-        joint position range [soft_min, soft_max], relative to the
-        default standing pose.
-        
-        Scales are pre-calculated in __init__ for efficiency.
+        Calculates a cyclical (sine wave) target position for the calf joints.
+        Used for testing the PD controller's tracking performance.
         """
+        # 1. Calculate the current time in the simulation
+        current_time = self.step_counter * self.dt
         
-        # 1. Separate positive and negative actions
-        positive_actions = np.clip(action, 0.0, 1.0) # Action's positive 'nudge' [0, 1]
-        negative_actions = np.clip(action, -1.0, 0.0) # Action's negative 'nudge' [-1, 0]
-
-        # 2. Apply pre-calculated scales:
-        target_dof_pos = (self.default_dof_pos + 
-                          positive_actions * self.scale_to_max + 
-                          negative_actions * self.scale_to_min)
+        # 2. Calculate the cyclical offset (a sine wave)
+        #    This moves from -amplitude to +amplitude and back
+        offset = self.test_amplitude * np.sin(
+            2 * np.pi * self.test_frequency * current_time
+        )
+        
+        # 3. Start with the default "home" pose
+        target_dof_pos = self.default_dof_pos.copy()
+        
+        # 4. Add the offset to the default position of the calf joints
+        #    so they oscillate around their 'home' position
+        target_dof_pos[self.calf_joint_indices] += offset
         
         return target_dof_pos
 
@@ -278,29 +211,26 @@ class UnitreeEnv(gym.Env): # Or your specific base class
             geom1 = contact.geom1
             geom2 = contact.geom2
             
-            # Check if one geom is ground (geomid=0) and the other is part of the robot
             robot_geom = -1
             if geom1 == 0 and geom2 > 0:
                 robot_geom = geom2
             elif geom2 == 0 and geom1 > 0:
-                 robot_geom = geom1
-                 
+                robot_geom = geom1
+                
             if robot_geom != -1:
-                 # Calculate force vector in world frame
-                 force_vector = np.zeros(6)
-                 mujoco.mj_contactForce(self.model, self.data, i, force_vector)
-                 contact_force_world = force_vector[0:3] # Only translational force
+                force_vector = np.zeros(6)
+                mujoco.mj_contactForce(self.model, self.data, i, force_vector)
+                contact_force_world = force_vector[0:3] 
 
-                 if robot_geom not in contacts:
-                      contacts[robot_geom] = np.zeros(3)
-                 contacts[robot_geom] += contact_force_world
-                 contact_geom_ids.add(robot_geom)
+                if robot_geom not in contacts:
+                    contacts[robot_geom] = np.zeros(3)
+                contacts[robot_geom] += contact_force_world
+                contact_geom_ids.add(robot_geom)
 
-        # This function returns TWO values
         return contacts, contact_geom_ids
+
     def _get_obs(self):
         """ Computes and returns the observation vector. """
-        # --- Base velocity and orientation ---
         qpos = self.data.qpos
         qvel = self.data.qvel
 
@@ -314,108 +244,112 @@ class UnitreeEnv(gym.Env): # Or your specific base class
 
         base_lin_vel_world = self.data.qvel[:3].copy()
         self.base_lin_vel = base_rot_mat.T @ base_lin_vel_world
-
         self.base_ang_vel = self.data.sensor('imu_gyro').data.copy()
-
         gravity_world = np.array([0, 0, -9.81])
         self.projected_gravity = base_rot_mat.T @ gravity_world
 
-        # --- Foot Contacts ---
-        # --- REVERT TO USING FOOT FORCE SENSORS ---
-        contact_threshold = 1.0 # Adjust if needed
-
-        # Get force sensor readings (assuming they output 3D force or similar)
-        fl_force = self.data.sensor('FL_foot_force').data # Shape depends on sensor definition
+        contact_threshold = 1.0 
+        fl_force = self.data.sensor('FL_foot_force').data
         fr_force = self.data.sensor('FR_foot_force').data
         rl_force = self.data.sensor('RL_foot_force').data
         rr_force = self.data.sensor('RR_foot_force').data
 
-        # Check the vertical component (usually index 2) against the threshold
-        # Adapt index if your sensor output is different (e.g., just magnitude)
         fl_contact = float(np.abs(fl_force[2]) > contact_threshold) if len(fl_force) >=3 else float(np.abs(fl_force) > contact_threshold)
         fr_contact = float(np.abs(fr_force[2]) > contact_threshold) if len(fr_force) >=3 else float(np.abs(fr_force) > contact_threshold)
         rl_contact = float(np.abs(rl_force[2]) > contact_threshold) if len(rl_force) >=3 else float(np.abs(rl_force) > contact_threshold)
         rr_contact = float(np.abs(rr_force[2]) > contact_threshold) if len(rr_force) >=3 else float(np.abs(rr_force) > contact_threshold)
 
-        foot_contacts_float = np.array([fl_contact, fr_contact, rl_contact, rr_contact], dtype=np.float32) # Shape (4,)
-        self.current_foot_contacts = foot_contacts_float # Store for reward functions
-        # -----------------------------------------------
+        foot_contacts_float = np.array([fl_contact, fr_contact, rl_contact, rr_contact], dtype=np.float32)
+        self.current_foot_contacts = foot_contacts_float
 
-        # --- Assemble Observation Buffer ---
         obs = np.concatenate((
-            self.base_lin_vel * self.obs_scales_lin_vel,       # <--- SCALE IT
-            self.base_ang_vel * self.obs_scales_ang_vel,     # <--- SCALE IT
-            self.projected_gravity,                           # (Already normalized)
-            self.commands,                                    # (Already normalized)
-            (self.dof_pos - self.default_dof_pos) * self.obs_scales_dof_pos, # <--- SCALE IT
-            self.dof_vel * self.obs_scales_dof_vel,           # <--- SCALE IT
+            self.base_lin_vel * self.obs_scales_lin_vel,
+            self.base_ang_vel * self.obs_scales_ang_vel,
+            self.projected_gravity,
+            self.commands,
+            (self.dof_pos - self.default_dof_pos) * self.obs_scales_dof_pos,
+            self.dof_vel * self.obs_scales_dof_vel,
             self.last_actions,
-            foot_contacts_float 
+            foot_contacts_float,
+            self.cpg_states  # <-- ADD THIS
         )).astype(np.float32)
-
         return obs
 
     def _sample_value(self, min_val, max_val, dead_zone=0.2):
-        """
-        Samples a value from a range, ensuring it's outside a 'dead zone'
-        around zero (unless it's exactly zero).
-        """
-        # Sample a value
-        val = self.np_random.uniform(min_val, max_val)
-        
-        # Apply the dead zone
+        """Samples a value from a range, ensuring it's outside a 'dead zone'"""
+        val = np.random.uniform(min_val, max_val)
         if 0 < abs(val) < dead_zone:
-            # If it's in the dead zone (but not zero), force it to the minimum value
             val = dead_zone * np.sign(val)
-            
         return val
-
+    
+    # ==========================================================================
+    # 4. REPLACE YOUR STEP FUNCTION
+    # ==========================================================================
     def step(self, action):
-        """ Applies action, simulates, calculates rewards, and returns results. """
-        # --- Apply PD Control Action ---
-        clipped_action = np.clip(action, self.action_space.low, self.action_space.high)
+        """ Applies CPG action, simulates, calculates rewards, and returns results. """
         
-        # --- STORE CURRENT ACTION ---
-        self._current_action_for_reward = clipped_action # Store for reward calc
+        # --- CPG CONTROLLER ---
+        # The 'action' from the agent is IGNORED.
+        # We get target positions directly from our hard-coded CPG.
+        #target_dof_pos = self.default_dof_pos
+        clipped_action = np.clip(action, self.action_space.low, self.action_space.high)
+        target_dof_pos, self.cpg_states = self.cpg_network.step(rl_action=clipped_action)
+        #target_dof_pos = self.cyclic_step()
+        #print(f"CPG Target DOF Positions:\n{target_dof_pos.reshape(4,3)}") # Debug print
+        
+        # --- For Reward/Obs Buffers ---
+        # We still need to populate these buffers for compatibility.
+        # We'll just pretend the "action" was zero.
+        # --- CPG-RL CONTROLLER ---
+        # 1. Clip the raw RL action (this is the 8-dim CPG param vector)
+        
+        
+        # 2. Store the "previous" action for the action_rate reward
+        self.prev_last_actions = self.last_actions.copy()
+
+        # 3. Pass the action to the CPG network
+        #    (Make sure your CPGNetwork.step returns two values!)
+        target_dof_pos, self.cpg_states = self.cpg_network.step(rl_action=clipped_action)
+        
+        # 4. Store this action for the *next* observation and action_rate
+        self.last_actions = clipped_action
+        
+        # --- PD Controller (Unchanged) ---
+        # (Your PD controller code is here)
         # ---------------------------
-
-        #clipped_action = np.zeros_like(action) # Use a safe action
-
-        target_dof_pos = self._map_actions_to_targets(clipped_action)
         
         # PD Controller: Calculate torques
         current_dof_pos = self.data.qpos[7:]
-
-        print("\n--- PD Controller Debug ---")
-        print("Current DOF Pos:")
-        print(current_dof_pos)
-        print("Target DOF Pos:")
-        print(target_dof_pos)
-
+        
+        #print(f"Current DOF Positions:\n{current_dof_pos.reshape(4,3)}") # Debug print
         current_dof_vel = self.data.qvel[6:]
         
         position_error = (target_dof_pos - current_dof_pos)
+        
+        #velocity_error = (target_dof_vel - current_dof_vel)
         velocity_error = -current_dof_vel 
         
         self.torques = self.p_gains * position_error + self.d_gains * velocity_error
         
-        print("Calculated Torques:")
-        print(self.torques)
-
         ctrl_limit = self.model.actuator_ctrlrange[:, 1]
+        #print(f"Control Limits:\n{ctrl_limit.reshape(4,3)}") # Debug print
         applied_torques = np.clip(self.torques, -ctrl_limit, ctrl_limit)
         
-        # --- ADD THIS DEBUG BLOCK ---
+        # --- MODIFIED DEBUG BLOCK ---
         if self.render_mode == "human" and self.step_counter % 50 == 0: # Print every 50 steps
-            print("\n--- PD Controller Debug (Step", self.step_counter, ") ---")
-            # Print policy output (Front-Left leg)
-            print(f"  Policy Action (FL leg):  {clipped_action[:3]}") 
-            # Print target position (Front-Left leg)
-            print(f"  Target Pos (FL leg):     {target_dof_pos[:3]}")
+            print("\n--- CPG Controller Debug (Step", self.step_counter, ") ---")
+            # Print CPG target position (Front-Left leg)
+            print(f"  CPG Target Pos (FL leg):   {target_dof_pos[3:6]}") # FL is index 1 (joints 3,4,5)
+
+            print(f" Current Pos (FL leg):   {current_dof_pos[3:6]}") # FL is index 1 (joints 3,4,5)
             # Print default position (Front-Left leg)
-            print(f"  Default Pos (FL leg):    {self.default_dof_pos[:3]}")
+            print(f"  Default Pos (FL leg):    {self.default_dof_pos[3:6]}")
+
+            #print(f"  Position error (FL leg):    {position_error[3:6]}")
             # Print final torque (Front-Left leg)
-            print(f"  Applied Torque (FL leg): {applied_torques[:3]}")
+            print(f"  Applied Torque (FL leg): {applied_torques[3:6]}")
+
+            print(f"Current dt: {self.dt}")
         self.step_counter += 1
         # -------------------------------
 
@@ -426,81 +360,37 @@ class UnitreeEnv(gym.Env): # Or your specific base class
 
         # --- Simulate ---
         self.data.ctrl[:] = applied_torques
-        for _ in range(self.frame_skip):
-            mujoco.mj_step(self.model, self.data)
-            #time.sleep(0.05)
-        # --- Get Observations ---
-        observation = self._get_obs()
+        mujoco.mj_step(self.model, self.data, nstep=self.frame_skip)
+        
+        # --- Get Observation ---
+        observation = self._get_obs() 
 
-        # --- Compute Reward ---
-        # _compute_reward will now be able to access self._current_action_for_reward
+        # --- Calculate Rewards (Dummy values for now) ---
+        # (Reward calculation is complex and not implemented in your snippet)
 
-        # --- Check Termination ---
-        terminated, truncated = self._check_termination()
+        terminated = False 
 
+        terminated, truncated = self._check_termination() # This already checks max_episode_length
         reward, reward_info = self._compute_reward(terminated, truncated)
-        #truncated = False # Add logic for time limits if needed (e.g., self.current_step >= self.max_steps)
+        
+        # --- Check Terminations (Dummy values for now) ---
+        
+        truncated = self.step_counter >= self.max_episode_length
+        
+        # --- Render ---
+        if self.render_mode == "human":
+            self.render() # Call the new render method
 
-        # --- Update State History ---
-        current_dof_vel = self.data.qvel[6:].copy() # Get current velocity before updating last_dof_vel
-        self.last_actions = clipped_action.copy()
-        self.last_dof_vel = current_dof_vel # Update last velocity
-
-        # --- Info dictionary ---
+        # --- Update Buffers (for next step's obs/rewards) ---
+        
         info = {}
         info.update(reward_info)
+
+        #if terminated or truncated:
+        #    self.reset()
         # Add any other relevant info
 
-        # (Optional) Render if needed
-        if self.render_mode == "human":
-             self.render()
-
         return observation, reward, terminated, truncated, info
-
-    def _compute_reward(self, terminated, time_out):
-        """ Calculates the reward based on active reward functions. """
-        total_reward = 0.0
-        reward_info = {}
-
-        # Use torch for calculations if desired for consistency with legged_gym
-        # Or keep using numpy
-        
-        # --- Call individual reward functions ---
-        # Note: These functions now need to exist in this class and use MuJoCo data access
-        # Ensure internal state variables (self.base_lin_vel etc.) are updated in _get_obs or step
-        
-        # Example using a helper function for potentially missing rewards:
-        def get_reward_or_zero(name):
-             func_name = f"_reward_{name}"
-             if hasattr(self, func_name) and name in self.active_reward_scales:
-                 # Calculate reward using numpy/torch
-                 # For torch, convert numpy arrays to tensors first:
-                 # rew = getattr(self, func_name)(torch.from_numpy(self.some_state)).numpy()
-                 # For numpy:
-                 rew = getattr(self, func_name)()
-                 scaled_rew = rew * self.active_reward_scales[name]
-                 reward_info[f"reward_{name}"] = scaled_rew
-                 return scaled_rew
-             return 0.0
-
-        for name in self.active_reward_scales.keys():
-            if name != "termination": # Termination handled separately
-                 total_reward += get_reward_or_zero(name)
-
-        # --- Clip negative rewards if configured ---
-        # if self.cfg.rewards.only_positive_rewards: # Need to add this config
-        #    total_reward = np.clip(total_reward, a_min=0.0, a_max=None)
-
-        # --- Add termination reward ---
-        # Need termination check logic first to set self.reset_buf equivalent
-        # Need time_out logic similar to legged_gym
-        #time_out = False # Replace with actual check
-        if "termination" in self.active_reward_scales:
-            term_rew = self._reward_termination(terminated, time_out) * self.active_reward_scales["termination"]
-            total_reward += term_rew
-            reward_info["reward_termination"] = term_rew
-
-        return total_reward, reward_info
 
     def _check_termination(self):
         """ Checks if the episode should terminate. """
@@ -552,48 +442,55 @@ class UnitreeEnv(gym.Env): # Or your specific base class
             # -----------------------------------
         # --------------------------------------------------------
 
+        terminated = base_contact or orientation_violated or body_too_low
+        return terminated, truncated
 
-        return base_contact or orientation_violated or truncated, truncated# or body_too_low
 
-# --- Helper to convert quat to RPY (adjust based on your quat convention) ---
-    def _quat_to_rpy(self, q):
-         # MuJoCo sensors ('imu_quat') are scalar-first (w, x, y, z)
-         # OLD: qx, qy, qz, qw = q[0], q[1], q[2], q[3]
-         qw, qx, qy, qz = q[0], q[1], q[2], q[3] # NEW: Correct scalar-first order
-         
-         # Roll (x-axis rotation)
-         sinr_cosp = 2 * (qw * qx + qy * qz)
-         cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
-         roll = np.arctan2(sinr_cosp, cosr_cosp)
-         
-         # Pitch (y-axis rotation)
-         sinp = 2 * (qw * qy - qz * qx)
-         if abs(sinp) >= 1:
-             pitch = np.copysign(np.pi / 2, sinp) # Use 90 degrees if out of range
-         else:
-             pitch = np.arcsin(sinp)
-             
-         # Yaw (z-axis rotation)
-         siny_cosp = 2 * (qw * qz + qx * qy)
-         cosy_cosp = 1 - 2 * (qy * qy + qz * qz)
-         yaw = np.arctan2(siny_cosp, cosy_cosp)
-         
-         return roll, pitch, yaw
+    def _compute_reward(self, terminated, time_out):
+        """ Calculates the reward based on active reward functions. """
+        total_reward = 0.0
+        reward_info = {}
 
-    # --- Implement ALL reward functions from legged_robot.py below ---
-    # Convert torch operations to numpy equivalents
-    
-    # Example conversions:
-    # torch.sum(..., dim=1) -> np.sum(..., axis=1)
-    # torch.square(...) -> np.square(...)
-    # torch.clip(..., min=a, max=b) -> np.clip(..., a_min=a, a_max=b)
-    # torch.exp(...) -> np.exp(...)
-    # torch.norm(..., dim=1) -> np.linalg.norm(..., axis=1)
-    # torch.logical_or(...) -> np.logical_or(...)
-    # torch.any(..., dim=1) -> np.any(..., axis=1)
-    
-    # --- Make sure to use self.base_lin_vel, self.base_ang_vel etc.
-    # --- which are updated in _get_obs()
+        # Use torch for calculations if desired for consistency with legged_gym
+        # Or keep using numpy
+        
+        # --- Call individual reward functions ---
+        # Note: These functions now need to exist in this class and use MuJoCo data access
+        # Ensure internal state variables (self.base_lin_vel etc.) are updated in _get_obs or step
+        
+        # Example using a helper function for potentially missing rewards:
+        def get_reward_or_zero(name):
+             func_name = f"_reward_{name}"
+             if hasattr(self, func_name) and name in self.active_reward_scales:
+                 # Calculate reward using numpy/torch
+                 # For torch, convert numpy arrays to tensors first:
+                 # rew = getattr(self, func_name)(torch.from_numpy(self.some_state)).numpy()
+                 # For numpy:
+                 rew = getattr(self, func_name)()
+                 scaled_rew = rew * self.active_reward_scales[name]
+                 reward_info[f"reward_{name}"] = scaled_rew
+                 return scaled_rew
+             return 0.0
+
+        for name in self.active_reward_scales.keys():
+            if name != "termination": # Termination handled separately
+                 total_reward += get_reward_or_zero(name)
+
+        # --- Clip negative rewards if configured ---
+        # if self.cfg.rewards.only_positive_rewards: # Need to add this config
+        #    total_reward = np.clip(total_reward, a_min=0.0, a_max=None)
+
+        # --- Add termination reward ---
+        # Need termination check logic first to set self.reset_buf equivalent
+        # Need time_out logic similar to legged_gym
+        #time_out = False # Replace with actual check
+        if "termination" in self.active_reward_scales:
+            term_rew = self._reward_termination(terminated, time_out) * self.active_reward_scales["termination"]
+            total_reward += term_rew
+            reward_info["reward_termination"] = term_rew
+
+        return total_reward, reward_info
+
     def _reward_large_tracking_error(self):
         """
         Penalizes the agent for a large velocity tracking error
@@ -669,8 +566,8 @@ class UnitreeEnv(gym.Env): # Or your specific base class
 
     def _reward_action_rate(self):
         # Penalize changes in actions
-        # Use actions (current) and last_actions (previous step)
-        return np.sum(np.square(self.last_actions - self._current_action_for_reward)) # NEW LINE
+        # Use last_actions (current) and prev_last_actions (previous step)
+        return np.sum(np.square(self.last_actions - self.prev_last_actions))
 
     def _reward_collision(self):
         # Penalize collisions on selected bodies (geoms)
@@ -841,31 +738,62 @@ class UnitreeEnv(gym.Env): # Or your specific base class
         # A constant reward for every step the agent is alive
         return 1.0
 
-    # Add reset logic if needed
+    def _quat_to_rpy(self, q):
+         # MuJoCo sensors ('imu_quat') are scalar-first (w, x, y, z)
+         # OLD: qx, qy, qz, qw = q[0], q[1], q[2], q[3]
+         qw, qx, qy, qz = q[0], q[1], q[2], q[3] # NEW: Correct scalar-first order
+         
+         # Roll (x-axis rotation)
+         sinr_cosp = 2 * (qw * qx + qy * qz)
+         cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
+         roll = np.arctan2(sinr_cosp, cosr_cosp)
+         
+         # Pitch (y-axis rotation)
+         sinp = 2 * (qw * qy - qz * qx)
+         if abs(sinp) >= 1:
+             pitch = np.copysign(np.pi / 2, sinp) # Use 90 degrees if out of range
+         else:
+             pitch = np.arcsin(sinp)
+             
+         # Yaw (z-axis rotation)
+         siny_cosp = 2 * (qw * qz + qx * qy)
+         cosy_cosp = 1 - 2 * (qy * qy + qz * qz)
+         yaw = np.arctan2(siny_cosp, cosy_cosp)
+         
+         return roll, pitch, yaw
+
+    # ==========================================================================
+    # 5. ADD RESET, RENDER, AND CLOSE METHODS
+    # ==========================================================================
     def reset(self, seed=None, options=None):
         super().reset(seed=seed) # Important for Gymnasium compatibility
-
-        # --- Reset simulation ---
-        mujoco.mj_resetData(self.model, self.data)
-
-        # --- Reset state ---
-        # Example: Set to default pose + small noise
-        noise_low = -0.02
-        noise_high = 0.02
-        self.step_counter = 0 # <-- Make sure to reset the counter!
+        
         qpos = self.init_qpos.copy()
         qvel = self.init_qvel.copy()
-        #qpos = self.init_qpos + self.np_random.uniform(low=noise_low, high=noise_high, size=self.model.nq)
-        #qvel = self.init_qvel + self.np_random.uniform(low=noise_low, high=noise_high, size=self.model.nv)
-        
-        #qpos[2] = 0.30  # Manually set the height (e.g., 0.42 meters)
-        # --- THIS LINE CAUSES THE ERROR ---
-        # self.set_state(qpos, qvel) # REMOVE THIS LINE
-        # ---------------------------------
-
-        # --- REPLACE WITH THESE LINES ---
+        # ... (your existing sim reset code) ...
         self.data.qpos[:] = qpos
         self.data.qvel[:] = qvel
+        mujoco.mj_forward(self.model, self.data)
+
+        # --- CPG RESET ---
+        self.cpg_network.reset() # This sets the initial phases
+        
+        # --- GET INITIAL CPG STATE ---
+        # (This requires a get_state() method in your HopfOscillator class)
+        try:
+            self.cpg_states = np.concatenate(
+                [osc.get_state() for osc in self.cpg_network.oscillators]
+            )
+        except AttributeError:
+            print("ERROR: Your HopfOscillator class is missing a 'get_state()' method.")
+            print("Please add: def get_state(self): return np.array([self.x, self.y])")
+            raise
+        # -------------------------------
+
+        # --- Reset buffers ---
+        self.last_actions = np.zeros(self.action_space.shape) # Now 8-dim
+        self.prev_last_actions = np.zeros(self.action_space.shape) # Add this
+        # ... (rest of your buffer resets) ...
         mujoco.mj_forward(self.model, self.data) # Update kinematics after setting state
         # -------------------------------
 
@@ -882,26 +810,15 @@ class UnitreeEnv(gym.Env): # Or your specific base class
         return observation, info
 
     def render(self):
-        """ Renders the environment. """
-        #time.sleep(0.2)
-        if self.render_mode == "human" and self.viewer is not None:
-            try:
-                self.viewer.sync()
-            except Exception as e:
-                # Handle window close gracefully
-                if "Window" in str(e) or "glfw" in str(e).lower():
-                    print("Viewer window closed.")
-                    self.viewer = None # Stop trying to render
-                else:
-                    raise
+        """ Syncs the passive viewer. """
+        if self.viewer and self.viewer.is_running():
+            self.viewer.sync()
 
     def close(self):
-        """ Closes the environment viewer. """
-        if self.viewer is not None:
+        """ Closes the viewer. """
+        if self.viewer:
             self.viewer.close()
-            self.viewer = None
-
-    # Add _resample_commands if needed
+    
     def _resample_commands(self):
         """
         Randomly select commands.
@@ -959,6 +876,62 @@ class UnitreeEnv(gym.Env): # Or your specific base class
                     self.commands[2] = self._sample_value(ang_vel_yaw_range[0], ang_vel_yaw_range[1])
 
 
-# You will also need to update your training script (`multi_env.py`)
-# Ensure the observation space matches the environment's new definition.
-# The action space remains the same, but its interpretation changes in the step function.
+# ==============================================================================
+# 6. ADD A MAIN BLOCK TO RUN THE SCRIPT
+# ==============================================================================
+if __name__ == "__main__":
+    
+    # --- !! IMPORTANT !! ---
+    # --- SET YOUR MODEL PATH HERE ---
+    XML_MODEL_PATH = "../../unitree_mujoco/unitree_robots/go2/scene_ground.xml" # <--- UPDATE THIS
+    # -----------------------
+
+    print("Launching CPG-controlled quadruped in MuJoCo...")
+    
+    try:
+        env = UnitreeEnv(model_path=XML_MODEL_PATH, 
+                         render_mode="human", 
+                         frame_skip=1) 
+        
+        obs, info = env.reset(seed=42)
+        dummy_action = np.zeros(env.action_space.shape)
+        
+        # --- NEW: FPS Counter Setup ---
+        print("\nStarting simulation loop. Press Ctrl+C to stop.")
+        start_time = time.time()
+        num_steps = 0
+        print_interval = 2000 # Print FPS every 2000 steps
+        # -----------------------------
+
+        for i in range(100000): # Run for more steps
+            obs, reward, terminated, truncated, info = env.step(dummy_action)
+            
+            if terminated or truncated:
+                obs, info = env.reset()
+            # --- NEW: FPS Calculation ---
+            num_steps += 1
+            if (i + 1) % print_interval == 0:
+                end_time = time.time()
+                elapsed_time = end_time - start_time
+                fps = num_steps / elapsed_time
+                
+                print(f"\n--- FPS Report (Step {i+1}) ---")
+                print(f"    Time: {elapsed_time:.2f} s")
+                print(f"    Steps: {num_steps}")
+                print(f"    FPS: {fps:.2f} steps/sec")
+                print("------------------------------")
+                
+                # Reset for next batch
+                start_time = time.time()
+                num_steps = 0
+            # --- END NEW ---
+                
+            if terminated or truncated:
+                print(f"Episode finished after {i+1} steps.")
+                obs, info = env.reset()
+                
+    except KeyboardInterrupt: # Added this to catch Ctrl+C
+        print("\nTraining interrupted by user.")
+    #except FileNotFoundError:
+    #   ... (rest of your file) ...
+    

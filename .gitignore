@@ -5,3 +5,7 @@ Go2_CPG_Model
 tensorboard
 Random_models
 models/Current
+CPG/SAC_CPG_tensorboard
+CPG/__pycache__
+CPG/models
+CPG/MUJOCO_LOG.TXT
