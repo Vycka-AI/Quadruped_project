@@ -4,3 +4,4 @@ ppo_go2_tensorboard
 Go2_CPG_Model
 tensorboard
 Random_models
+*.Zone.Identifier
