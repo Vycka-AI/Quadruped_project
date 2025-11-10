@@ -11,10 +11,12 @@ import time
 # Assuming you have your UnitreeEnv class inheriting from gym.Env or similar
 
 class UnitreeEnv(gym.Env): # Or your specific base class
-    def __init__(self, model_path, render_mode=None, frame_skip=1, **kwargs):
+    def __init__(self, model_path, render_mode=None, test_mode=False, frame_skip=4, **kwargs):
         super().__init__()
+        self.calf_joint_indices = np.array([1, 4, 7, 10])
         self.frame_skip = frame_skip
         self.render_mode = render_mode
+        self.test_mode = test_mode
         self.viewer = None
 
         self.model = mujoco.MjModel.from_xml_path(model_path)
@@ -48,7 +50,7 @@ class UnitreeEnv(gym.Env): # Or your specific base class
         # --- SET YOUR SAFETY MARGIN (AS A PERCENTAGE) ---
         # 5% (0.05) is a good start. This means a joint with 10 radians of
         # total motion will get a 0.5 rad offset on each end.
-        self.joint_limit_margin_percentage = 0.3
+        self.joint_limit_margin_percentage = 0.05
 
         # --- 1. GET HARD (PHYSICAL) LIMITS ---
         # Get limits from the MuJoCo model
@@ -71,6 +73,9 @@ class UnitreeEnv(gym.Env): # Or your specific base class
         # (self.default_dof_pos is defined in __init__)
         self.scale_to_max = self.soft_jnt_max - self.default_dof_pos
         self.scale_to_min = self.default_dof_pos - self.soft_jnt_min
+
+        print("Scale to Max:", self.scale_to_max)
+        print("Scale to Min:", self.scale_to_min)
 
         # --- 5. SANITY CHECK (UPDATED) ---
         if np.any(self.scale_to_max < 0) or np.any(self.scale_to_min < 0):
@@ -107,12 +112,14 @@ class UnitreeEnv(gym.Env): # Or your specific base class
             print("\n" + "="*80)
 
 
+        self.test_amplitude = 0.5  # Radians (how far the joint moves)
+        self.test_frequency = 1.0  # Hz (how fast it moves, 1.0 = 1 cycle/sec)
 
 
         # Example PD Gains (Adapt from GO2RoughCfg.control)
         # Assuming stiffness=20, damping=0.5 for all joints
-        self.p_gains = np.full(self.model.nu, 25.0)
-        self.d_gains = np.full(self.model.nu, 0.5)
+        self.p_gains = np.full(self.model.nu, 35.0)
+        self.d_gains = np.full(self.model.nu, 2.0)
 
 
         self.obs_scales_lin_vel = 2.0
@@ -165,25 +172,25 @@ class UnitreeEnv(gym.Env): # Or your specific base class
             "lin_vel_z": -0.2,
             "ang_vel_xy": -0.05,
             "orientation": -1.0, # Default is 0
-            "base_height": -5.0, # Default is 0
+            "base_height": -2.0, # Default is 0
             "torques": -0.0002, # From GO2RoughCfg
             "dof_vel": -0.01, # Default is 0
             "dof_acc": -2.5e-7,
             "action_rate": -0.01,
             "collision": -0.1,
             "termination": -12.0, # Default is 0
-            "dof_pos_limits": -10.0, # From GO2RoughCfg
+            "dof_pos_limits": -0.5, # From GO2RoughCfg
             "dof_vel_limits": 0.0, # Default not specified or 0
             "torque_limits": 0.0, # Default not specified or 0
-            "tracking_lin_vel": 4.0,# * self.dt,
-            "tracking_ang_vel": 1.0,# * self.dt,
+            "tracking_lin_vel": 5.0,# * self.dt,
+            "tracking_ang_vel": 2.0,# * self.dt,
             "feet_air_time": 1.0,
             "stumble": -0.0, # Default is 0
             "stand_still": -0.1, # Default is 0
             "feet_contact_forces": 0.0, # Default not specified or 0
-            "living_bonus": 0.0,# * self.dt, # <-- ADD THIS REWARD
-            "feet_stuck": -1.0,
-            "large_tracking_error": -1.0
+            "living_bonus": 0.2,# * self.dt, # <-- ADD THIS REWARD
+            "feet_stuck": -0.3,
+            "large_tracking_error": -0.1
         }
         # Filter out zero scales for efficiency
         self.active_reward_scales = {k: v for k, v in self.reward_scales.items() if v != 0.0}
@@ -378,19 +385,22 @@ class UnitreeEnv(gym.Env): # Or your specific base class
         # --- STORE CURRENT ACTION ---
         self._current_action_for_reward = clipped_action # Store for reward calc
         # ---------------------------
+        if self.test_mode:
+            target_dof_pos = self.cyclic_step()
+        else:
+            target_dof_pos = self._map_actions_to_targets(clipped_action)
 
         #clipped_action = np.zeros_like(action) # Use a safe action
 
-        target_dof_pos = self._map_actions_to_targets(clipped_action)
         
         # PD Controller: Calculate torques
         current_dof_pos = self.data.qpos[7:]
 
-        print("\n--- PD Controller Debug ---")
-        print("Current DOF Pos:")
-        print(current_dof_pos)
-        print("Target DOF Pos:")
-        print(target_dof_pos)
+        #print("\n--- PD Controller Debug ---")
+        #print("Current DOF Pos:")
+        #print(current_dof_pos)
+        #print("Target DOF Pos:")
+        #print(target_dof_pos)
 
         current_dof_vel = self.data.qvel[6:]
         
@@ -399,8 +409,8 @@ class UnitreeEnv(gym.Env): # Or your specific base class
         
         self.torques = self.p_gains * position_error + self.d_gains * velocity_error
         
-        print("Calculated Torques:")
-        print(self.torques)
+        #print("Calculated Torques:")
+        #print(self.torques)
 
         ctrl_limit = self.model.actuator_ctrlrange[:, 1]
         applied_torques = np.clip(self.torques, -ctrl_limit, ctrl_limit)
@@ -442,9 +452,9 @@ class UnitreeEnv(gym.Env): # Or your specific base class
         #truncated = False # Add logic for time limits if needed (e.g., self.current_step >= self.max_steps)
 
         # --- Update State History ---
-        current_dof_vel = self.data.qvel[6:].copy() # Get current velocity before updating last_dof_vel
+        #current_dof_vel = self.data.qvel[6:].copy() # Get current velocity before updating last_dof_vel
         self.last_actions = clipped_action.copy()
-        self.last_dof_vel = current_dof_vel # Update last velocity
+        #self.last_dof_vel = current_dof_vel # Update last velocity
 
         # --- Info dictionary ---
         info = {}
@@ -501,6 +511,28 @@ class UnitreeEnv(gym.Env): # Or your specific base class
             reward_info["reward_termination"] = term_rew
 
         return total_reward, reward_info
+    def cyclic_step(self):
+        """
+        Calculates a cyclical (sine wave) target position for the calf joints.
+        Used for testing the PD controller's tracking performance.
+        """
+        # 1. Calculate the current time in the simulation
+        current_time = self.step_counter * self.dt
+        
+        # 2. Calculate the cyclical offset (a sine wave)
+        #    This moves from -amplitude to +amplitude and back
+        offset = self.test_amplitude * np.sin(
+            2 * np.pi * self.test_frequency * current_time
+        )
+        
+        # 3. Start with the default "home" pose
+        target_dof_pos = self.default_dof_pos.copy()
+        
+        # 4. Add the offset to the default position of the calf joints
+        #    so they oscillate around their 'home' position
+        target_dof_pos[self.calf_joint_indices] += offset
+        
+        return target_dof_pos
 
     def _check_termination(self):
         """ Checks if the episode should terminate. """
@@ -854,6 +886,7 @@ class UnitreeEnv(gym.Env): # Or your specific base class
         noise_high = 0.02
         self.step_counter = 0 # <-- Make sure to reset the counter!
         qpos = self.init_qpos.copy()
+        #self.init_qpos[7:] = self.default_dof_pos
         qvel = self.init_qvel.copy()
         #qpos = self.init_qpos + self.np_random.uniform(low=noise_low, high=noise_high, size=self.model.nq)
         #qvel = self.init_qvel + self.np_random.uniform(low=noise_low, high=noise_high, size=self.model.nv)
@@ -959,6 +992,63 @@ class UnitreeEnv(gym.Env): # Or your specific base class
                     self.commands[2] = self._sample_value(ang_vel_yaw_range[0], ang_vel_yaw_range[1])
 
 
-# You will also need to update your training script (`multi_env.py`)
-# Ensure the observation space matches the environment's new definition.
-# The action space remains the same, but its interpretation changes in the step function.
+# ==============================================================================
+# 6. ADD A MAIN BLOCK TO RUN THE SCRIPT
+# ==============================================================================
+if __name__ == "__main__":
+    
+    # --- !! IMPORTANT !! ---
+    # --- SET YOUR MODEL PATH HERE ---
+    XML_MODEL_PATH = "../unitree_mujoco/unitree_robots/go2/scene_suspended.xml" # <--- UPDATE THIS
+    # -----------------------
+
+    print("Launching CPG-controlled quadruped in MuJoCo...")
+    
+    try:
+        env = UnitreeEnv(model_path=XML_MODEL_PATH, 
+                         render_mode="human", 
+                         test_mode=True,
+                         frame_skip=1) 
+        
+        obs, info = env.reset(seed=42)
+        dummy_action = np.zeros(env.action_space.shape)
+        
+        # --- NEW: FPS Counter Setup ---
+        print("\nStarting simulation loop. Press Ctrl+C to stop.")
+        start_time = time.time()
+        num_steps = 0
+        print_interval = 2000 # Print FPS every 2000 steps
+        # -----------------------------
+
+        for i in range(100000): # Run for more steps
+            obs, reward, terminated, truncated, info = env.step(dummy_action)
+            
+            if terminated or truncated:
+                obs, info = env.reset()
+            # --- NEW: FPS Calculation ---
+            num_steps += 1
+            if (i + 1) % print_interval == 0:
+                end_time = time.time()
+                elapsed_time = end_time - start_time
+                fps = num_steps / elapsed_time
+                
+                print(f"\n--- FPS Report (Step {i+1}) ---")
+                print(f"    Time: {elapsed_time:.2f} s")
+                print(f"    Steps: {num_steps}")
+                print(f"    FPS: {fps:.2f} steps/sec")
+                print("------------------------------")
+                
+                # Reset for next batch
+                start_time = time.time()
+                num_steps = 0
+            # --- END NEW ---
+                
+            if terminated or truncated:
+                print(f"Episode finished after {i+1} steps.")
+                obs, info = env.reset()
+                
+    except KeyboardInterrupt: # Added this to catch Ctrl+C
+        print("\nTraining interrupted by user.")
+    #except FileNotFoundError:
+    #   ... (rest of your file) ...
+    

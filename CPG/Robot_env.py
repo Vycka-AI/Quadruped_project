@@ -48,7 +48,7 @@ class UnitreeEnv(gym.Env):
         self.obs_scales_dof_vel = 0.05
 
         self.step_counter = 0
-        self.max_episode_length = 6000
+        self.max_episode_length = 3000
 
         self.termination_geom_indices = []
         self.penalised_geom_indices = []
@@ -293,7 +293,7 @@ class UnitreeEnv(gym.Env):
         # We get target positions directly from our hard-coded CPG.
         #target_dof_pos = self.default_dof_pos
         clipped_action = np.clip(action, self.action_space.low, self.action_space.high)
-        target_dof_pos, self.cpg_states = self.cpg_network.step(rl_action=clipped_action)
+        #target_dof_pos, self.cpg_states = self.cpg_network.step(rl_action=clipped_action)
         #target_dof_pos = self.cyclic_step()
         #print(f"CPG Target DOF Positions:\n{target_dof_pos.reshape(4,3)}") # Debug print
         

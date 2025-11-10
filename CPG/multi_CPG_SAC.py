@@ -22,7 +22,7 @@ env = make_vec_env(env_id, n_envs=num_cpu)
 
 # --- Model save path ---
 
-model_name = "Super_CPG"
+model_name = "Super_CPG_NEW"
 
 folder = "../models/Current/"
 model_save_path = folder + model_name + ".zip"

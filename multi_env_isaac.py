@@ -13,7 +13,10 @@ args = parser.parse_args()
 
 # --- Environment creation ---
 env_id = lambda: UnitreeEnv(
-    model_path='../unitree_mujoco/unitree_robots/go2/scene_ground.xml'
+    model_path='../unitree_mujoco/unitree_robots/go2/scene_ground.xml',
+    #render_mode="human", 
+    test_mode=False,
+    frame_skip=1
 )
 
 TENSORBOARD_LOG_DIR = "./ppo_go2_tensorboard/"
@@ -22,7 +25,7 @@ env = make_vec_env(env_id, n_envs=num_cpu)
 
 # --- Model save path ---
 
-model_name = "New_PDZ"
+model_name = "Newest_PPOOO"
 
 folder = "models/Current/"
 model_save_path = folder + model_name + ".zip"
@@ -38,15 +41,15 @@ else:
     policy_kwargs = dict(
         activation_fn=ELU,
         net_arch=dict(pi=[512, 256, 128], vf=[512, 256, 128]),
-        log_std_init=0.0
+        log_std_init=2.0
     )
     model = PPO(
         "MlpPolicy",
         env,
         verbose=1,
         device='cpu',
-        n_steps=2048,
-        ent_coef=0.005,
+        n_steps=1024,  # Number of steps to run for each environment per update
+        #ent_coef=0.005,
         tensorboard_log=TENSORBOARD_LOG_DIR,
         policy_kwargs=policy_kwargs
     )

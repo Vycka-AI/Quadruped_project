@@ -1,5 +1,5 @@
 import time
-from stable_baselines3 import SAC
+from stable_baselines3 import PPO
 from copied_isaac import UnitreeEnv
 import mujoco
 import mujoco.viewer
@@ -12,7 +12,7 @@ env = UnitreeEnv(
 )
 
 # Load the trained agent
-model = SAC.load("models/Best/Feet_up.zip", env=env)
+model = PPO.load("models/Best/Feet_up.zip", env=env)
 
 
 

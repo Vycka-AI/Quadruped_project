@@ -22,7 +22,7 @@ else:
 
 
 # --- The rest of your script ---
-model_save_path = "models/Current/New_PDZ.zip"
+model_save_path = "models/Current/Newest_PPOOO.zip"
 
 env = UnitreeEnv(
     model_path='../unitree_mujoco/unitree_robots/go2/scene_ground.xml',

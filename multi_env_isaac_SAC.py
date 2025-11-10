@@ -11,18 +11,21 @@ parser = argparse.ArgumentParser(description="Train a Unitree Go2 robot.")
 parser.add_argument('--gui', action='store_true', help="Enable GUI rendering.")
 args = parser.parse_args()
 
-# --- Environment creation ---
+
 env_id = lambda: UnitreeEnv(
-    model_path='../unitree_mujoco/unitree_robots/go2/scene_ground.xml'
+    model_path='../unitree_mujoco/unitree_robots/go2/scene_ground.xml',
+    #render_mode="human", 
+    test_mode=False,
+    frame_skip=4
 )
 
 TENSORBOARD_LOG_DIR = "./ppo_go2_tensorboard/"
-num_cpu = 16  # Change this to match your machine
+num_cpu = 2  # Change this to match your machine
 env = make_vec_env(env_id, n_envs=num_cpu)
 
 # --- Model save path ---
 
-model_name = "New_Try"
+model_name = "Zuper_new"
 
 folder = "models/Current/"
 model_save_path = folder + model_name + ".zip"
@@ -38,8 +41,8 @@ else:
     print(f"--- Starting new training on {num_cpu} environments ---")
     policy_kwargs = dict(
         activation_fn=ELU,
-        net_arch=dict(pi=[512, 256, 128], qf=[512, 256, 128]),
-        log_std_init=0.0
+        net_arch=dict(pi=[512, 256, 128], qf=[512, 256, 128])
+        #log_std_init=0.0
     )
     model = SAC(
         "MlpPolicy",
@@ -48,7 +51,7 @@ else:
         device='cuda',
         # --- Key SAC parameters ---
         buffer_size=2_000_000, # (int) Size of the replay buffer
-        learning_starts=50000,  # (int) How many steps to take before starting to learn
+        learning_starts=20000,  # (int) How many steps to take before starting to learn
         batch_size=256,         # (int) Mini-batch size for each gradient update
         # ---
         ent_coef='auto',        # <-- Let SAC automatically tune the entropy bonus!
@@ -59,7 +62,7 @@ else:
 
 # --- Checkpoint callback (save every 100k steps) ---
 checkpoint_callback = CheckpointCallback(
-    save_freq=100_000 // num_cpu,  # adjusted for vectorized envs
+    save_freq=50_000 // num_cpu,  # adjusted for vectorized envs
     save_path=checkpoint_dir,
     name_prefix="rl_model_v2_"
 )
