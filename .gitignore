@@ -5,3 +5,4 @@ Go2_CPG_Model
 tensorboard
 Random_models
 *.Zone.Identifier
+*:Zone.Identifier
