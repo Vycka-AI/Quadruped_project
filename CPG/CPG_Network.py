@@ -4,7 +4,7 @@ import numpy as np
 # 1. Minimal Hopf Oscillator Class
 # ==============================================================================
 class HopfOscillator:
-    def __init__(self, dt, alpha=50.0):
+    def __init__(self, dt, alpha=5.0):
         self.dt = dt
         self.alpha = alpha
         self.x = 1.0
@@ -41,7 +41,13 @@ class CPGNetwork:
             (1.5,  1.1, -0.8),  # RR leg
             (1.5,  1.1, -0.8)   # RL leg
         ]
-        self.joint_gains = list(np.array(self.joint_gains)/3.0)
+        #self.joint_gains = [
+        #    (1.5,  1.1, -0.8),  # FR leg (Abd, Hip, Knee)
+        #    (1.5,  1.1, -0.8),  # FL leg
+        #    (1.5,  1.1, -0.8),  # RR leg
+        #    (1.5,  1.1, -0.8)   # RL leg
+        #]
+        self.joint_gains = list(np.array(self.joint_gains)/2.0)
         
         if base_positions is None:
             self.base_positions = np.array([
@@ -68,19 +74,19 @@ class CPGNetwork:
             frequencies_action = rl_action[4:8]
             
             # --- Amplitude Mapping ---
-            base_amp = 0.5  # 0.5 rad
-            amp_gain = 0.5  # +/- 0.5 rad
+            base_amp = 1.5  # 0.5 rad
+            amp_gain = 1.5  # +/- 0.5 rad
             scaled_amps = base_amp + (amplitudes_action * amp_gain)
             # This gives a range of [0.0, 1.0] rad
 
             # --- Frequency Mapping (with gain) ---
-            base_freq = 2.5  # The "default" trot frequency in Hz
-            freq_gain = 1.5  # How much the network can vary it (up or down)
+            base_freq = 3.5 # The "default" trot frequency in Hz
+            freq_gain = 3.0  # How much the network can vary it (up or down)
             scaled_freqs = base_freq + (frequencies_action * freq_gain)
             # This gives a range of [1.0, 4.0] Hz
             
             # Ensure frequencies are non-negative (safety clip)
-            scaled_freqs = np.clip(scaled_freqs, 0.5, 5.0)
+            scaled_freqs = np.clip(scaled_freqs, 0.5, 7.5)
 
         else:
             # --- 2. HARD-CODED (NON-RL) TEST MODE ---
@@ -88,7 +94,7 @@ class CPGNetwork:
             # (like in your __main__ test script)
             
             # Set physical parameters directly.
-            scaled_amps = np.array([0.0, 0.0, 0.0, 0.0]) # 0.0 amp for stand-still test
+            scaled_amps = np.array([0.1, 0.1, 0.1, 0.1]) # 0.0 amp for stand-still test
             scaled_freqs = np.array([1.0, 1.0, 1.0, 1.0]) # 1.0 Hz
         
 

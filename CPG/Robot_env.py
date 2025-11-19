@@ -12,7 +12,8 @@ class UnitreeEnv(gym.Env):
         super().__init__()
         #self.calf_joint_indices = np.array([2, 5, 8, 11])
         #self.calf_joint_indices = np.array([1, 4, 7, 10])
-        self.calf_joint_indices = np.array([0, 3, 6, 9])
+        self.calf_joint_indices = np.array([1, 4, 7, 10])
+        
         self.frame_skip = frame_skip
         self.render_mode = render_mode
         self.viewer = None
@@ -37,8 +38,8 @@ class UnitreeEnv(gym.Env):
 
         self.init_qpos[7:] = self.default_dof_pos
 
-        self.p_gains = np.full(self.model.nu, 35.0)  # VERY low P-gain
-        self.d_gains = np.full(self.model.nu, 1.0)  # VERY low D-gain
+        self.p_gains = np.full(self.model.nu, 70.0)  # VERY low P-gain
+        self.d_gains = np.full(self.model.nu, 2.5)  # VERY low D-gain
         #self.p_gains = np.full(self.model.nu, 0.0)  # VERY low P-gain
         #self.d_gains = np.full(self.model.nu, 0.0)  # VERY low D-gain
 
@@ -293,7 +294,7 @@ class UnitreeEnv(gym.Env):
         # We get target positions directly from our hard-coded CPG.
         #target_dof_pos = self.default_dof_pos
         clipped_action = np.clip(action, self.action_space.low, self.action_space.high)
-        #target_dof_pos, self.cpg_states = self.cpg_network.step(rl_action=clipped_action)
+        target_dof_pos, self.cpg_states = self.cpg_network.step(rl_action=clipped_action)
         #target_dof_pos = self.cyclic_step()
         #print(f"CPG Target DOF Positions:\n{target_dof_pos.reshape(4,3)}") # Debug print
         
@@ -309,10 +310,10 @@ class UnitreeEnv(gym.Env):
 
         # 3. Pass the action to the CPG network
         #    (Make sure your CPGNetwork.step returns two values!)
-        target_dof_pos, self.cpg_states = self.cpg_network.step(rl_action=clipped_action)
+        #target_dof_pos, self.cpg_states = self.cpg_network.step(rl_action=clipped_action)
         
         # 4. Store this action for the *next* observation and action_rate
-        self.last_actions = clipped_action
+        #self.last_actions = clipped_action
         
         # --- PD Controller (Unchanged) ---
         # (Your PD controller code is here)
@@ -336,6 +337,7 @@ class UnitreeEnv(gym.Env):
         applied_torques = np.clip(self.torques, -ctrl_limit, ctrl_limit)
         
         # --- MODIFIED DEBUG BLOCK ---
+        """
         if self.render_mode == "human" and self.step_counter % 50 == 0: # Print every 50 steps
             print("\n--- CPG Controller Debug (Step", self.step_counter, ") ---")
             # Print CPG target position (Front-Left leg)
@@ -350,6 +352,7 @@ class UnitreeEnv(gym.Env):
             print(f"  Applied Torque (FL leg): {applied_torques[3:6]}")
 
             print(f"Current dt: {self.dt}")
+        """
         self.step_counter += 1
         # -------------------------------
 
