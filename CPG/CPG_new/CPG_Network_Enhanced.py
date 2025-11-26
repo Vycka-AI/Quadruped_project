@@ -43,12 +43,14 @@ class EnhancedCPGNetwork:
     def __init__(self, dt, base_positions):
         self.dt = dt
         self.oscillators = [EnhancedHopfOscillator(dt) for _ in range(4)]
+        
         # Gains: [Abduction, Hip, Knee]
-        self.joint_gains = np.array([0.1, 0.4, 0.4]) 
+        self.joint_gains = np.array([0.1, -0.4, 0.4]) 
         self.base_positions = base_positions
+        
         self.param_ranges = {
-            'amplitude': (0.0, 1.0),      # Normalized amplitude
-            'frequency': (1.0, 4.0),      # Hz
+            'amplitude': (0.0, 1.5),
+            'frequency': (1.0, 5.0),
             'phase': (-np.pi, np.pi)
         }
 
@@ -56,10 +58,15 @@ class EnhancedCPGNetwork:
         # Action shape: (12,) -> (4 oscillators, 3 params)
         action_matrix = rl_action.reshape(4, 3)
         
-        # Scale actions
-        amps = self.param_ranges['amplitude'][0] + (action_matrix[:, 0] + 1)/2 * (self.param_ranges['amplitude'][1] - self.param_ranges['amplitude'][0])
+        # --- FIX IS HERE ---
+        # 1. Amplitude: Use DIRECTLY (The controller already outputs 0.0 to 1.0)
+        amps = action_matrix[:, 0]
+        
+        # 2. Frequency: Keep scaling (Controller outputs -1 to 1, map to 1Hz-4Hz)
         freqs = self.param_ranges['frequency'][0] + (action_matrix[:, 1] + 1)/2 * (self.param_ranges['frequency'][1] - self.param_ranges['frequency'][0])
-        phases = action_matrix[:, 2] * np.pi # Map -1,1 to -pi, pi
+        
+        # 3. Phase: Keep scaling (Controller outputs -1 to 1 (or 0/1), map to -pi to pi)
+        phases = action_matrix[:, 2] * np.pi 
 
         joint_commands = []
         cpg_states = []
@@ -69,16 +76,16 @@ class EnhancedCPGNetwork:
             x, y = osc.step()
             
             # Mapping strategy:
-            # x drives Hip (Thigh)
-            # y drives Knee (Calf) - naturally 90 deg offset
-            # Abduction is usually kept stable or driven slightly by x
-            
             base_idx = i * 3
-            # Abduction (keep mostly stiff or slight osc)
+            
+            # Abduction
             abd = self.base_positions[base_idx] 
-            # Hip
+            
+            # Hip (Thigh) - Driven by X
             hip = self.base_positions[base_idx+1] + self.joint_gains[1] * x
-            # Knee
+            
+            # Knee (Calf) - Driven by Y
+            # Note: If amp is 0, y is 0, so Knee stays at base_position (Standard Standing)
             knee = self.base_positions[base_idx+2] + self.joint_gains[2] * y
             
             joint_commands.extend([abd, hip, knee])
@@ -89,3 +96,4 @@ class EnhancedCPGNetwork:
     def reset(self):
         for osc in self.oscillators:
             osc.x, osc.y = 1.0, 0.0
+

@@ -28,16 +28,17 @@ class UnitreeEnv(gym.Env):
         
         # Standard Go2 Standing Pose
         self.default_dof_pos = np.array([
-            0.1, 0.8, -1.5,   # FL
-            -0.1, 0.8, -1.5,  # FR
-            0.1, 1.0, -1.5,   # RL
-            -0.1, 1.0, -1.5   # RR
+            0.1, 0.8, -1.8,   # FL (Knee changed from -1.5 to -1.8)
+            -0.1, 0.8, -1.8,  # FR
+            0.1, 1.0, -1.8,   # RL
+            -0.1, 1.0, -1.8   # RR
         ])
         self.init_qpos[7:] = self.default_dof_pos
 
+        self.init_qpos[2] = 0.25
         # Control Parameters
-        self.p_gains = np.full(self.nu, 25.0)
-        self.d_gains = np.full(self.nu, 0.6)
+        self.p_gains = np.full(self.nu, 100.0)
+        self.d_gains = np.full(self.nu, 2.0)
         self.dt = self.model.opt.timestep * self.frame_skip
 
         # CPG
@@ -90,23 +91,50 @@ class UnitreeEnv(gym.Env):
         if self.render_mode == "human":
             self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
 
+    
+
     def step(self, action):
         action = np.clip(action, -1, 1)
         
+        amp_indices = [0, 3, 6, 9]
+        cpg_action = action.copy()
+        # Apply Mapping: [-1, 1] -> [0.0, 1.0]
+        # Agent Output 0.0 (Idle) -> CPG Input 0.5 (Stepping)
+        cpg_action[amp_indices] = (cpg_action[amp_indices] + 1.0) * 0.5
+
+
         # 1. Step CPG
-        target_dof_pos, self.cpg_states = self.cpg_network.step(action)
+        target_dof_pos, self.cpg_states = self.cpg_network.step(cpg_action)
         
+
+
         # 2. PD Control
-        self.dof_pos = self.data.qpos[7:]
-        self.dof_vel = self.data.qvel[6:]
+        #self.dof_pos = self.data.qpos[7:]
+        #self.dof_vel = self.data.qvel[6:]
         
-        torques = self.p_gains * (target_dof_pos - self.dof_pos) + \
-                  self.d_gains * (0 - self.dof_vel) # Damping term targets 0 velocity relative to CPG
+        #torques = self.p_gains * (target_dof_pos - self.dof_pos) + \
+        #          self.d_gains * (0 - self.dof_vel) # Damping term targets 0 velocity relative to CPG
         
-        self.data.ctrl[:] = np.clip(torques, -25, 25) # Clip to torque limits
+        #self.data.ctrl[:] = np.clip(torques, -25, 25) # Clip to torque limits
         
         # 3. Physics Step
-        mujoco.mj_step(self.model, self.data, nstep=self.frame_skip)
+        for _ in range(self.frame_skip):
+            # A. Get CURRENT state (updates every millisecond)
+            current_pos = self.data.qpos[7:]
+            current_vel = self.data.qvel[6:]
+            
+            # B. Calculate Torques based on FRESH state
+            # This allows the 'D' term to dampen impacts immediately
+            torques = self.p_gains * (target_dof_pos - current_pos) + \
+                      self.d_gains * (0 - current_vel)
+            
+            # C. Apply and Step
+            self.data.ctrl[:] = np.clip(torques, -25, 25)
+            mujoco.mj_step(self.model, self.data)
+            
+            # Optional: Update viewer every substep if you want super smooth video, 
+            # but usually we sync only once per control step to save speed.
+        #mujoco.mj_step(self.model, self.data, nstep=self.frame_skip)
         
         # 4. Update Visuals
         if self.render_mode == "human" and self.viewer.is_running():
@@ -145,10 +173,33 @@ class UnitreeEnv(gym.Env):
         # Foot Contacts (Simple force thresholding)
         # Note: Real Unitree go2 xmls often use site sensors for feet
         self.current_contacts = np.zeros(4)
-        for i, body_id in enumerate(self.feet_site_ids):
-            # Extract simple contact logic or use force sensors if available in your XML
-            # This is a placeholder for contact detection logic
-            self.current_contacts[i] = 0.0 # Implement contact check based on your XML structure
+        forces = [
+            self.data.sensor('FL_foot_force').data[2],
+            self.data.sensor('FR_foot_force').data[2],
+            self.data.sensor('RL_foot_force').data[2],
+            self.data.sensor('RR_foot_force').data[2]
+        ]
+        # 2. Hysteresis Settings
+        contact_on_threshold = 6.0  # Force needed to ENTER stance
+        contact_off_threshold = 3.0 # Force needed to EXIT stance (lift off)
+        
+        for i in range(4):
+            f = np.abs(forces[i])
+            
+            # Logic:
+            # If force is HUGE -> Contact is True
+            # If force is TINY -> Contact is False
+            # If force is MEDIUM -> Keep previous value (don't flicker)
+            
+            if f > contact_on_threshold:
+                self.current_contacts[i] = 1.0
+            elif f < contact_off_threshold:
+                self.current_contacts[i] = 0.0
+            else:
+                # Keep the existing state (from the previous step)
+                # We don't change anything
+                pass
+
 
     def _get_obs(self):
         return np.concatenate([
@@ -164,33 +215,28 @@ class UnitreeEnv(gym.Env):
         ]).astype(np.float32)
 
     def _compute_reward(self, action):
-        rew = 0.0
+        dt = 0.01
+        # 1. Linear velocity tracking (x, y)
+        # Note: We removed the scalar multipliers (0.75, 0.5) here to treat them as probabilities
+        r_lin_x = np.exp(-((self.commands[0] - self.base_lin_vel[0])**2) / 0.25)
+        r_lin_y = np.exp(-((self.commands[1] - self.base_lin_vel[1])**2) / 0.25)
+        r_ang_z = np.exp(-((self.commands[2] - self.base_ang_vel[2])**2) / 0.25)
         
-        # 1. Tracking
-        lin_error = np.sum(np.square(self.commands[:2] - self.base_lin_vel[:2]))
-        rew += np.exp(-lin_error/0.25) * self.reward_scales['tracking_lin_vel']
-        
-        ang_error = np.square(self.commands[2] - self.base_ang_vel[2])
-        rew += np.exp(-ang_error/0.25) * self.reward_scales['tracking_ang_vel']
-        
-        # 2. Penalties
-        rew += np.square(self.base_lin_vel[2]) * self.reward_scales['lin_vel_z']
-        rew += np.sum(np.square(self.base_ang_vel[:2])) * self.reward_scales['ang_vel_xy']
-        
-        # Orientation (penalize if gravity vector isn't [0,0,-1])
-        rew += np.sum(np.square(self.projected_gravity[:2])) * self.reward_scales['orientation']
-        
-        # Joint Limits
-        # Corrected logic using self.actuator_joint_ranges
-        soft_limit_min = self.actuator_joint_ranges[:, 0] + 0.1
-        soft_limit_max = self.actuator_joint_ranges[:, 1] - 0.1
-        out_of_limits = np.maximum(0, soft_limit_min - self.dof_pos) + np.maximum(0, self.dof_pos - soft_limit_max)
-        rew += np.sum(out_of_limits) * self.reward_scales['dof_pos_limits']
-        
-        # Action Rate (Smoothness)
-        rew += np.sum(np.square(action - self.last_actions)) * self.reward_scales['action_rate']
+        # MULTIPLICATIVE REWARD
+        # If the robot doesn't track X, it gets NOTHING for tracking Y or Z.
+        # This forces it to move to unlock the other points.
+        reward_tracking = (r_lin_x * r_lin_y * r_ang_z) * 2.0  # Scale up total
+        # 3. Linear velocity penalty (z)
+        lin_z_penalty = - (self.base_lin_vel[2] ** 2) * 2 
+        # 4. Angular velocity penalty (roll, pitch)
+        ang_xy_penalty = - (np.sum(self.base_ang_vel[:2] ** 2)) * 0.05 
+        # 5. Work penalty
+        work = - np.abs(np.dot(self.data.actuator_force, self.dof_vel - self.last_dof_vel)) * 0.001 
+        # Sum all terms
+        reward = reward_tracking + lin_z_penalty + ang_xy_penalty + work
+        return reward
 
-        return rew
+    
 
     def _check_termination(self):
         # Terminate if falling
@@ -220,11 +266,61 @@ class UnitreeEnv(gym.Env):
         return self._get_obs(), {}
 
     def _resample_commands(self):
-        self.commands = np.array([
-            np.random.uniform(0.0, 1.0), # X vel
-            0.0,                         # Y vel
-            0.0                          # Yaw
-        ])
+        """
+        Resamples commands with NO mixing (standalone only).
+        Reduces the chance of standing still to 10%.
+        """
+        # --- 1. Define Command Ranges (Slightly Reduced for Stability) ---
+        # Format: (min_speed, max_speed) magnitude
+        
+        # Forward: [-0.5 to 1.5] approx
+        lin_vel_x_range = [-0.5, 1.5] 
+        
+        # Sideways: [-0.4 to 0.4]
+        lin_vel_y_range = [-0.4, 0.4]
+        
+        # Rotation: [-1.0 to 1.0]
+        ang_vel_yaw_range = [-0.5, 0.5]
+        
+        # Minimum magnitude to ensure robot actually tries to move
+        deadband = 0.01 
+        # -----------------------------------------------------------
+
+        # --- 2. Zero out all commands first ---
+        self.commands[:] = 0.0
+        
+        # --- 3. Define Probabilities ---
+        # 10% Stand, 40% Forward, 25% Side, 25% Rotate
+        modes = ['stand', 'forward', 'sideways', 'rotate']
+        probs = [0.05,    0.45,      0.25,       0.25]
+
+        # --- 4. Select Mode ---
+        rng = self.np_random if hasattr(self, 'np_random') else np.random
+        chosen_mode = rng.choice(modes, p=probs)
+
+        if chosen_mode == 'stand':
+            # Commands remain [0, 0, 0]
+            pass
+
+        elif chosen_mode == 'forward':
+            # Sample uniform
+            val = rng.uniform(*lin_vel_x_range)
+            # Apply Deadband: If value is too close to 0, push it out
+            if abs(val) < deadband:
+                val = deadband if val > 0 else -deadband
+            self.commands[0] = val
+
+        elif chosen_mode == 'sideways':
+            val = rng.uniform(*lin_vel_y_range)
+            if abs(val) < deadband:
+                val = deadband if val > 0 else -deadband
+            self.commands[1] = val
+
+        elif chosen_mode == 'rotate':
+            val = rng.uniform(*ang_vel_yaw_range)
+            if abs(val) < deadband:
+                val = deadband if val > 0 else -deadband
+            self.commands[2] = val
 
     def close(self):
         if self.viewer:

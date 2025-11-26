@@ -12,9 +12,10 @@ env_id = lambda: UnitreeEnv(
     frame_skip=5
 )
 
-TENSORBOARD_LOG_DIR = "./ppo_go2_tensorboard/"
+TENSORBOARD_LOG_DIR = "./ppo_go2_tensorboard/Stabler/"
 num_cpu = 16
-model_name = "PPO_Minimal_New"
+#model_name = "PPO_Minimal_New"
+model_name = "Stabler"
 folder = "../models/Current/"
 model_save_path = folder + model_name + ".zip"
 normalize_path = folder + model_name + "_vecnormalize.pkl"
@@ -42,6 +43,8 @@ policy_kwargs = dict(
 if os.path.exists(model_save_path):
     print(f"Loading model from {model_save_path}")
     model = PPO.load(model_save_path, env=env, tensorboard_log=TENSORBOARD_LOG_DIR)
+    #model.n_steps = 4096  # Update n_steps if needed
+    model.ent_coef=0.01
 else:
     print("Creating new PPO model")
     model = PPO(

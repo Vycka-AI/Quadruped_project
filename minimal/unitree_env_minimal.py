@@ -18,7 +18,7 @@ class UnitreeEnv(gym.Env):
             self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
 
         self.init_qpos = self.data.qpos.copy()
-        self.init_qpos[2] = 0.325
+        self.init_qpos[2] = 0.45
         self.init_qvel = self.data.qvel.copy()
 
         # --- PD and Action Scaling ---
@@ -63,18 +63,29 @@ class UnitreeEnv(gym.Env):
         self.step_counter = 0
         self.max_episode_length = 6000
 
+        self._current_action_for_reward = np.zeros(self.action_space.shape)
+
         # --- Reward config ---
         self.reward_scales = {
-            "tracking_lin_vel": 5.0,
-            "living_bonus": 0.2,
-            "termination": -100.0,
-            "joint_center_penalty": -2.0,  # Start with -1.0, tune as needed
-            "side_velocity": -2.0,   # Penalize sideways movement
-            "yaw_rate": -2.0,        # Penalize spinning
-            "foot_clearance": 2.0,
-            "contact_evenness": -2.5,  
+            "tracking_lin_vel_x": 0.5,
+            "tracking_lin_vel_y": 6.0,
+            "living_bonus": 0.0,
+            #"termination": -1.0,
+            "joint_center_penalty": -0.05,  # Start with -1.0, tune as needed
+            "side_velocity": -0.005,   # Penalize sideways movement
+            "yaw_rate": -0.005,        # Penalize spinning
+            "forward_velocity": -0.005,
+            "foot_clearance": 3.0,
+            "feet_air_time": 2.0, # High weight!
+            "tracking_ang_vel": 6.0,  # <--- Add this (usually lower than linear)
+            #"contact_evenness": -0.5,  
+            "action_rate": -0.001,
+            "orientation": -0.5
         }
         self.tracking_sigma = 0.25
+    
+        self.feet_air_time = np.zeros(4)
+        self.last_contacts = np.zeros(4, dtype=bool) # Stores contact state of previous step
 
         # --- Indices ---
         self.feet_indices = np.array([
@@ -191,6 +202,7 @@ class UnitreeEnv(gym.Env):
 
     def step(self, action):
         clipped_action = np.clip(action, self.action_space.low, self.action_space.high)
+        self._current_action_for_reward = clipped_action
         target_dof_pos = self._map_actions_to_targets(clipped_action)
         current_dof_pos = self.data.qpos[7:]
         current_dof_vel = self.data.qvel[6:]
@@ -200,16 +212,37 @@ class UnitreeEnv(gym.Env):
         ctrl_limit = self.model.actuator_ctrlrange[:, 1]
         applied_torques = np.clip(torques, -ctrl_limit, ctrl_limit)
         self.data.ctrl[:] = applied_torques
+
+        self._push_robot()
+
         for _ in range(self.frame_skip):
             mujoco.mj_step(self.model, self.data)
         self.step_counter += 1
 
         # --- Command resampling every 8 seconds ---
-        resampling_time_steps = int(8.0 / self.dt)
+        resampling_time_steps = int(5.0 / self.dt)
         if self.step_counter % resampling_time_steps == 0:
             self._resample_commands()
 
         observation = self._get_obs()
+
+        contacts = self.current_foot_contacts > 0.5
+        self.feet_air_time += self.dt * (1 - contacts)
+        touchdown = np.logical_and(contacts, np.logical_not(self.last_contacts))
+        
+        raw_air_time_reward = (self.feet_air_time - 0.5) * touchdown
+
+        self._current_air_time_reward = np.clip(raw_air_time_reward, -1.0, 0.5).sum()
+
+        cmd_norm = np.linalg.norm(self.commands[:2])
+        if cmd_norm < 0.1:
+            self._current_air_time_reward = 0.0
+        # Reset the timers for feet that just touched down
+        self.feet_air_time[contacts] = 0.0
+        
+        # Update last_contacts for the next step
+        self.last_contacts = contacts.copy()
+
 
         self.foot_contact_history[self.contact_history_ptr] = self.current_foot_contacts
         self.contact_history_ptr = (self.contact_history_ptr + 1) % self.contact_history_len
@@ -227,19 +260,41 @@ class UnitreeEnv(gym.Env):
         info = {}
         return observation, reward, terminated, truncated, info
 
+    def _reward_feet_air_time(self):
+        # Simply return the value we calculated in step()
+        return self._current_air_time_reward
+
     def _reward_termination(self, terminated, time_out):
         # Only penalize if terminated by failure, not by timeout
         return terminated * (not time_out)
 
     def _compute_reward(self, terminated, time_out):
-        # Only forward velocity tracking and living bonus
-        lin_vel_error = np.sum(np.square(self.commands[:2] - self.base_lin_vel[:2]))
-        tracking_lin_vel = np.exp(-lin_vel_error / self.tracking_sigma)
+        # --- 1. Split Linear Velocity Tracking ---
+        # Calculate Forward (X) error
+        lin_vel_error_x = np.square(self.commands[0] - self.base_lin_vel[0])
+        tracking_lin_vel_x = np.exp(-lin_vel_error_x / self.tracking_sigma)
 
+        # Calculate Sideways (Y) error
+        lin_vel_error_y = np.square(self.commands[1] - self.base_lin_vel[1])
+        tracking_lin_vel_y = np.exp(-lin_vel_error_y / self.tracking_sigma)
+
+        # --- 2. Angular Velocity Tracking (Rotation) ---
+        ang_vel_error = np.square(self.commands[2] - self.base_ang_vel[2])
+        tracking_ang_vel = np.exp(-ang_vel_error / self.tracking_sigma)
+
+        # --- 3. Base Rewards ---
         living_bonus = 1.0
-        reward = self.reward_scales["tracking_lin_vel"] * tracking_lin_vel + \
+        
+        # Start calculating total reward
+        reward = self.reward_scales["tracking_lin_vel_x"] * tracking_lin_vel_x + \
+                 self.reward_scales["tracking_lin_vel_y"] * tracking_lin_vel_y + \
+                 self.reward_scales["tracking_ang_vel"] * tracking_ang_vel + \
                  self.reward_scales["living_bonus"] * living_bonus
         
+        if "feet_air_time" in self.reward_scales:
+            feet_air_time_reward = self._reward_feet_air_time() * self.reward_scales["feet_air_time"]
+            reward += feet_air_time_reward
+
         if "termination" in self.reward_scales:
             term_rew = self._reward_termination(terminated, time_out) * self.reward_scales["termination"]
             reward += term_rew
@@ -247,12 +302,14 @@ class UnitreeEnv(gym.Env):
         if "joint_center_penalty" in self.reward_scales:
             joint_penalty = self._reward_joint_center_penalty() * self.reward_scales["joint_center_penalty"]
             reward += joint_penalty
-
+        if "forward_velocity" in self.reward_scales:
+            forward_vel_penalty = self._penalty_forward_velocity() * self.reward_scales["forward_velocity"]
+            reward += forward_vel_penalty
         if "side_velocity" in self.reward_scales:
-            side_vel_penalty = self._reward_side_velocity() * self.reward_scales["side_velocity"]
+            side_vel_penalty = self._penalty_side_velocity() * self.reward_scales["side_velocity"]
             reward += side_vel_penalty
         if "yaw_rate" in self.reward_scales:
-            yaw_rate_penalty = self._reward_yaw_rate() * self.reward_scales["yaw_rate"]
+            yaw_rate_penalty = self._penalty_yaw_rate() * self.reward_scales["yaw_rate"]
             reward += yaw_rate_penalty
         if "foot_clearance" in self.reward_scales:
             foot_clearance_reward = self._reward_foot_clearance() * self.reward_scales["foot_clearance"]
@@ -260,8 +317,96 @@ class UnitreeEnv(gym.Env):
         if "contact_evenness" in self.reward_scales:
             contact_evenness_penalty = self._reward_contact_evenness() * self.reward_scales["contact_evenness"]
             reward += contact_evenness_penalty  # Subtract since it's a penalty
+        if "action_rate" in self.reward_scales:
+            action_rate_penalty = self._reward_action_rate() * self.reward_scales["action_rate"]
+            reward += action_rate_penalty
+        if "orientation" in self.reward_scales:
+            orientation_penalty = self._reward_orientation() * self.reward_scales["orientation"]
+            reward += orientation_penalty
+
         return reward
-    
+    '''
+    def _push_robot(self):
+        """
+        The 'Bully' Method:
+        Periodically shoves the robot to force it to learn stability and omnidirectional stepping.
+        """
+        # 1. Define how often to push (e.g., every 2.0 seconds)
+        # self.dt is usually 0.02s (50Hz), so this pushes every ~100 steps
+        push_interval_steps = int(2.0 / self.dt)
+        
+        # 2. Check if it's time to push
+        # We use modulo to trigger it cyclically
+        if self.step_counter > 0 and self.step_counter % push_interval_steps == 0:
+            
+            # --- A. Linear Push (XY) ---
+            # Range: [-1.0, 1.0] m/s
+            # This forces the robot to step forward/back or side-to-side to catch itself.
+            linear_perturbation = np.random.uniform(-1.0, 1.0, size=2)
+            
+            # Inject directly into base velocity (Index 0=X, 1=Y)
+            self.data.qvel[0] += linear_perturbation[0]
+            self.data.qvel[1] += linear_perturbation[1]
+            
+            # --- B. Rotational Push (Yaw) ---
+            # Range: [-2.0, 2.0] rad/s (approx 115 deg/s)
+            # This forces the robot to plant its feet to stop a spin.
+            yaw_perturbation = np.random.uniform(-2.0, 2.0)
+            
+            # Inject into Yaw velocity (Index 5 is Z-axis rotation for floating base)
+            self.data.qvel[5] += yaw_perturbation
+    '''
+    def _push_robot(self):
+        """
+        The 'Bully' Method (With Kickstart Bias):
+        Periodically shoves the robot.
+        Includes a 'bias' to nudge it towards the command to help it discover rewards.
+        """
+        # 1. Define interval (every 2.0s)
+        push_interval_steps = int(2.0 / self.dt)
+        
+        # 2. Trigger check
+        if self.step_counter > 0 and self.step_counter % push_interval_steps == 0:
+            
+            # --- CONFIGURATION ---
+            # Randomness strength (The Bully)
+            random_mag = 0.8 
+            
+            # Helpfulness strength (The Teacher)
+            # 0.0 = Pure Random (Hard mode)
+            # 0.5 = Moderate Help
+            # 1.0 = Strong Shove towards goal
+            bias_mag = 0.6 
+            
+            # --- GET CURRENT COMMANDS ---
+            # Assuming self.commands is [lin_vel_x, lin_vel_y, ang_vel_yaw]
+            target_vel_x = self.commands[0]
+            target_vel_y = self.commands[1]
+            target_ang_vel = self.commands[2]
+
+            # --- A. Linear Push (XY) ---
+            # 1. Generate pure random noise
+            noise = np.random.uniform(-1.0, 1.0, size=2)
+            
+            # 2. Create the "Helpful" vector (Direction of command)
+            bias = np.array([target_vel_x, target_vel_y])
+            
+            # 3. Mix them: (Random * 0.8) + (Command * 0.6)
+            # If command is 0 (standing), this reverts to pure random push (good for stability)
+            combined_push = (noise * random_mag) + (bias * bias_mag)
+            
+            # Inject
+            self.data.qvel[0] += combined_push[0]
+            self.data.qvel[1] += combined_push[1]
+            
+            # --- B. Rotational Push (Yaw) ---
+            # Same logic for rotation
+            yaw_noise = np.random.uniform(-2.0, 2.0)
+            yaw_bias = target_ang_vel
+            
+            combined_yaw = (yaw_noise * random_mag * 1.5) + (yaw_bias * bias_mag * 2.0)
+            
+            self.data.qvel[5] += combined_yaw
     def _reward_foot_clearance(self):
         # Get foot site positions (z)
         foot_sites = ['FL_site', 'FR_site', 'RL_site', 'RR_site']
@@ -274,14 +419,33 @@ class UnitreeEnv(gym.Env):
                 clearance += foot_z
         return clearance / len(foot_sites)
 
-    def _reward_side_velocity(self):
-        # Only penalize if commanded to walk forward
-        if abs(self.commands[0]) > 0.2 and abs(self.commands[1]) < 0.1 and abs(self.commands[2]) < 0.1:
-            return np.square(self.base_ang_vel[2])
+    def _penalty_forward_velocity(self):
+        """
+        Penalize forward velocity ONLY if we are NOT commanding forward movement.
+        """
+        # If the command for sideways (index 1) is near 0...
+        if abs(self.commands[0]) < 0.1:
+            # ...but the robot is moving forward (base_lin_vel[1]), penalize it.
+            return np.square(self.base_lin_vel[0])
         return 0.0
 
-    def _reward_yaw_rate(self):
-        if abs(self.commands[0]) > 0.2 and abs(self.commands[1]) < 0.1 and abs(self.commands[2]) < 0.1:
+    def _penalty_side_velocity(self):
+        """
+        Penalize sideways velocity (drift) ONLY if we are NOT commanding sideways movement.
+        """
+        # If the command for sideways (index 1) is near 0...
+        if abs(self.commands[1]) < 0.1:
+            # ...but the robot is moving sideways (base_lin_vel[1]), penalize it.
+            return np.square(self.base_lin_vel[1])
+        return 0.0
+
+    def _penalty_yaw_rate(self):
+        """
+        Penalize rotation (yaw rate) ONLY if we are NOT commanding rotation.
+        """
+        # If the command for rotation (index 2) is near 0...
+        if abs(self.commands[2]) < 0.1:
+            # ...but the robot is rotating (base_ang_vel[2]), penalize it.
             return np.square(self.base_ang_vel[2])
         return 0.0
 
@@ -293,10 +457,10 @@ class UnitreeEnv(gym.Env):
         """
 
         free_ranges = np.array([
-            0.1, 0.15, 0.2,
-            0.1, 0.15, 0.2,
-            0.1, 0.15, 0.2,
-            0.1, 0.15, 0.2,
+            0.2, 0.15, 0.2,
+            0.2, 0.15, 0.2,
+            0.2, 0.15, 0.2,
+            0.2, 0.15, 0.2,
         ])
 
         #free_joint_radius = 0.26  # radians
@@ -313,7 +477,7 @@ class UnitreeEnv(gym.Env):
         roll, pitch, yaw = self._quat_to_rpy(self.data.sensor('imu_quat').data)
         orientation_violated = abs(roll) > 1.2 or abs(pitch) > 1.5
         base_height = self.data.qpos[2]
-        body_too_low = base_height < 0.25
+        body_too_low = base_height < 0.15
         truncated = self.step_counter >= self.max_episode_length
 
         # --- 1. Check for Base Contact (Termination) ---
@@ -332,6 +496,17 @@ class UnitreeEnv(gym.Env):
 
 
         return base_contact or orientation_violated or body_too_low or truncated, truncated
+
+    def _reward_orientation(self):
+        # Penalize non flat base orientation
+        # Uses projected gravity calculated in _get_obs
+        return np.sum(np.square(self.projected_gravity[:2])) # Indices 0 and 1 for x, y component
+
+    def _reward_action_rate(self):
+        # Penalize changes in actions
+        # Use actions (current) and last_actions (previous step)
+        return np.sum(np.square(self.last_actions - self._current_action_for_reward)) # NEW LINE
+
 
     def _get_contact_info(self):
         """Helper to get contact forces and identify contacting geoms."""
@@ -394,10 +569,67 @@ class UnitreeEnv(gym.Env):
         info = {}
         return observation, info
 
+    #def _resample_commands(self):
+    #    # Only forward command for now
+    #    self.commands[:] = 0.0
+    #    self.commands[0] = np.random.uniform(0.1, 0.7)  # Forward velocity only
+
     def _resample_commands(self):
-        # Only forward command for now
+        """
+        Resamples commands with NO mixing (standalone only).
+        Reduces the chance of standing still to 10%.
+        """
+        # --- 1. Define Command Ranges (Slightly Reduced for Stability) ---
+        # Format: (min_speed, max_speed) magnitude
+        
+        # Forward: [-0.5 to 1.5] approx
+        lin_vel_x_range = [-0.5, 0.5] 
+        
+        # Sideways: [-0.4 to 0.4]
+        lin_vel_y_range = [-0.3, 0.3]
+        
+        # Rotation: [-1.0 to 1.0]
+        ang_vel_yaw_range = [-0.5, 0.5]
+        
+        # Minimum magnitude to ensure robot actually tries to move
+        deadband = 0.2 
+        # -----------------------------------------------------------
+
+        # --- 2. Zero out all commands first ---
         self.commands[:] = 0.0
-        self.commands[0] = np.random.uniform(0.1, 0.7)  # Forward velocity only
+        
+        # --- 3. Define Probabilities ---
+        # 10% Stand, 40% Forward, 25% Side, 25% Rotate
+        modes = ['stand', 'forward', 'sideways', 'rotate']
+        probs = [0.10,    0.40,      0.25,       0.25]
+
+        # --- 4. Select Mode ---
+        rng = self.np_random if hasattr(self, 'np_random') else np.random
+        chosen_mode = rng.choice(modes, p=probs)
+
+        if chosen_mode == 'stand':
+            # Commands remain [0, 0, 0]
+            pass
+
+        elif chosen_mode == 'forward':
+            # Sample uniform
+            val = rng.uniform(*lin_vel_x_range)
+            # Apply Deadband: If value is too close to 0, push it out
+            if abs(val) < deadband:
+                val = deadband if val > 0 else -deadband
+            self.commands[0] = val
+
+        elif chosen_mode == 'sideways':
+            val = rng.uniform(*lin_vel_y_range)
+            if abs(val) < deadband:
+                val = deadband if val > 0 else -deadband
+            self.commands[1] = val
+
+        elif chosen_mode == 'rotate':
+            val = rng.uniform(*ang_vel_yaw_range)
+            if abs(val) < deadband:
+                val = deadband if val > 0 else -deadband
+            self.commands[2] = val
 
     def render(self):
         if self.render_mode == "human" and self.viewer is not None:
