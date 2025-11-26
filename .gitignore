@@ -9,3 +9,4 @@ CPG/SAC_CPG_tensorboard
 CPG/__pycache__
 CPG/models
 CPG/MUJOCO_LOG.TXT
+CPG/CPG_new/models

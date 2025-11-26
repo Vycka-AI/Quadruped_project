@@ -99,8 +99,8 @@ listener.start()
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # Updated paths based on user input, ensure these are correct for your local setup
-    model_name = "./models/Backup/New_New/rl_model_v2__2340448_steps.zip"
-    vec_norm_name = "./models/Backup/New_New/rl_model_v2__2340448_steps_vecnormalize.pkl"
+    model_name = "./models/Backup/New_New/rl_model_v2__2840448_steps.zip"
+    vec_norm_name = "./models/Backup/New_New/rl_model_v2__2840448_steps_vecnormalize.pkl"
     xml_path = "../../../unitree_mujoco/unitree_robots/go2/scene_ground.xml" 
 
     # 1. Create the Environment
